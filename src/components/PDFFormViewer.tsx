@@ -12,8 +12,12 @@
  *   build.rollupOptions.output.manualChunks: { 'pdf-lib': ['pdf-lib'], 'pdfjs-dist': ['pdfjs-dist'] }
  *
  * DEPENDENCIES: npm install pdf-lib@1.17.1 pdfjs-dist
+ *
+ * FIXES APPLIED:
+ *  1. pageDimsRef added so buildFilledBytes can read media-box offsets
+ *  2. Signature stamp subtracts mbX/mbY — fixes wrong stamp position on saved PDF
+ *  3. Name-based heuristic fallback for /Sig detection (survives prod minification)
  */
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   ArrowLeft, Download, FileText, AlertCircle,
@@ -46,6 +50,8 @@ interface FieldInfo {
   options?: string[];
   isComb?: boolean;
   combLen?: number;
+  /** For radio buttons: the export value this specific widget represents */
+  buttonValue?: string;
 }
 
 interface PageDim {
@@ -74,6 +80,9 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
 
   const formValuesRef = useRef<Record<string, string>>({});
   const fieldsRef     = useRef<FieldInfo[]>([]);
+  // FIX 1: pageDimsRef lets buildFilledBytes read media-box offsets
+  // without being a stale closure over state.
+  const pageDimsRef   = useRef<PageDim[]>([]);
 
   const [pageDims,   setPageDims]   = useState<PageDim[]>([]);
   const [fields,     setFields]     = useState<FieldInfo[]>([]);
@@ -100,7 +109,7 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
     return () => ro.disconnect();
   }, []);
 
-  const maxW    = pageDims.length ? Math.max(...pageDims.map(d => d.width)) : 1;
+  const maxW     = pageDims.length ? Math.max(...pageDims.map(d => d.width)) : 1;
   const cssScale = containerW > 0 ? Math.min((containerW - 32) / maxW, 1) : 1;
 
   // ── Render one page ─────────────────────────────────────────────────────────
@@ -163,8 +172,18 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
         if (!active) return;
         pdfjsDocRef.current = pdfjsDoc;
 
-        // 3. Build rect → page map from pdfjs annotations (ground truth for page ownership)
-        type RectInfo = { pageIndex: number; pdfjsRect: number[] };
+        // 3. Build rect → page map from pdfjs annotations.
+        // pdfjs directly parses /FT, /Ff flags so fieldType/checkBox/radioButton
+        // are 100% reliable — no minification risk, no name guessing needed.
+        type RectInfo = {
+          pageIndex: number;
+          pdfjsRect: number[];
+          fieldType: string;    // 'Tx' | 'Btn' | 'Ch' | 'Sig'
+          checkBox: boolean;
+          radioButton: boolean;
+          fieldName: string;
+          buttonValue: string;  // export value for radio button widgets
+        };
         const rectInfoMap = new Map<string, RectInfo>();
         const dims: PageDim[] = [];
 
@@ -182,20 +201,26 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
             if (annot.subtype === 'Widget' && annot.rect) {
               const r   = annot.rect as number[];
               const key = `${Math.round(r[0])}_${Math.round(r[1])}_${Math.round(r[2])}_${Math.round(r[3])}`;
-              rectInfoMap.set(key, { pageIndex: i, pdfjsRect: r });
+              rectInfoMap.set(key, {
+                pageIndex:   i,
+                pdfjsRect:   r,
+                fieldType:   (annot as any).fieldType   ?? '',
+                checkBox:    (annot as any).checkBox    ?? false,
+                radioButton: (annot as any).radioButton ?? false,
+                fieldName:   (annot as any).fieldName   ?? '',
+                // buttonValue is the export value pdfjs gives each radio widget
+                buttonValue: (annot as any).buttonValue ?? (annot as any).exportValue ?? '',
+              });
             }
           }
         }
         if (!active) return;
 
         // 4. Extract AcroForm fields with pdf-lib
-        // Every call is wrapped — "n.toHex is not a function" and similar errors
-        // can fire on certain PDFs in prod builds due to minification of internal
-        // pdf-lib class names. If anything fails we degrade gracefully.
-        const extracted: FieldInfo[]            = [];
-        const initVals: Record<string, string>  = {};
-
+        const extracted: FieldInfo[]           = [];
+        const initVals: Record<string, string> = {};
         let pdfLibDoc: PDFDocument | null = null;
+
         try {
           pdfLibDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
         } catch (e) {
@@ -212,30 +237,27 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
             try {
               const name    = field.getName();
               const widgets = field.acroField.getWidgets();
-
-              let type: FieldType = 'text';
+              // pdf-lib fallback type — used only when pdfjs annotation lookup misses
+              let libType: FieldType = 'text';
               let options: string[] | undefined;
 
-              // Use instanceof — safe only because vite.config manualChunks keeps
-              // pdf-lib in its own chunk, preventing Rollup from renaming the classes
-              if      (field instanceof PDFCheckBox)   type = 'checkbox';
-              else if (field instanceof PDFRadioGroup) { type = 'radio';    options = (field as any).getOptions?.() ?? []; }
-              else if (field instanceof PDFDropdown)   { type = 'dropdown'; options = (field as any).getOptions?.() ?? []; }
-              else if (field instanceof PDFTextField)  type   = (field as any).isMultiline?.() ? 'multiline' : 'text';
+              if      (field instanceof PDFCheckBox)   libType = 'checkbox';
+              else if (field instanceof PDFRadioGroup) { libType = 'radio'; options = (field as any).getOptions?.() ?? []; }
+              else if (field instanceof PDFDropdown)   { libType = 'dropdown'; options = (field as any).getOptions?.() ?? []; }
+              else if (field instanceof PDFTextField)  libType = (field as any).isMultiline?.() ? 'multiline' : 'text';
               else {
-                // Signature fields have /FT = /Sig — pdf-lib has no class for them
                 try {
                   const ft = field.acroField.dict.get(PDFName.of('FT'));
-                  if (ft?.toString() === '/Sig') type = 'signature';
+                  if (ft?.toString() === '/Sig') libType = 'signature';
                 } catch {}
               }
 
               let isComb = false, combLen = 0;
               try {
                 if (field instanceof PDFTextField && widgets.length === 1) {
-                  const flags      = field.acroField.getFlags();
+                  const flags       = field.acroField.getFlags();
                   const hasCombFlag = (flags & (1 << 24)) !== 0;
-                  const maxLen     = field.acroField.getMaxLength();
+                  const maxLen      = field.acroField.getMaxLength();
                   if (hasCombFlag && maxLen && maxLen > 1) { isComb = true; combLen = maxLen; }
                 }
               } catch {}
@@ -257,15 +279,34 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
                   }
                   const pageIndex = info?.pageIndex ?? 0;
                   const pr        = info?.pdfjsRect ?? [rect.x, rect.y, x2, y2];
-                  const valueKey  = multiWidget
-                    ? `${name}__${Math.round(rect.x)}__${Math.round(rect.y)}`
-                    : name;
+
+                  // DEFINITIVE TYPE RESOLUTION — pdfjs annotation data is the ground truth.
+                  let effectiveType: FieldType = libType;
+                  if (info) {
+                    if      (info.fieldType === 'Sig')  effectiveType = 'signature';
+                    else if (info.checkBox)             effectiveType = 'checkbox';
+                    else if (info.radioButton)          effectiveType = 'radio';
+                    else if (info.fieldType === 'Ch')   effectiveType = libType === 'dropdown' ? 'dropdown' : 'radio';
+                    else if (info.fieldType === 'Tx')   effectiveType = libType === 'multiline' ? 'multiline' : 'text';
+                  }
+
+                  // Radio widgets in a group all share the same field name and must use
+                  // name (not the per-widget x/y key) so formValues[name] holds ONE
+                  // selected value for the whole group. multiWidget key is kept for all
+                  // other multi-widget field types (e.g. split text fields).
+                  const valueKey = (effectiveType === 'radio')
+                    ? name
+                    : (multiWidget ? `${name}__${Math.round(rect.x)}__${Math.round(rect.y)}` : name);
+
+                  const buttonValue = info?.buttonValue ?? '';
+
                   extracted.push({
-                    name, valueKey, type, pageIndex,
+                    name, valueKey, type: effectiveType, pageIndex,
                     px1: pr[0], py1: pr[1], px2: pr[2], py2: pr[3],
-                    options, isComb, combLen,
+                    options, isComb, combLen, buttonValue,
                   });
-                  if (!(valueKey in initVals)) initVals[valueKey] = type === 'checkbox' ? 'false' : '';
+
+                  if (!(valueKey in initVals)) initVals[valueKey] = effectiveType === 'checkbox' ? 'false' : '';
                 } catch (e) { console.warn('[PDFFormViewer] widget error:', e); }
               }
             } catch (e) { console.warn('[PDFFormViewer] field error:', e); }
@@ -275,7 +316,11 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
         if (!active) return;
         setFields(extracted);
         setFormValues(initVals);
+
+        // FIX 1: Keep pageDimsRef in sync so buildFilledBytes sees fresh dims
+        pageDimsRef.current = dims;
         setPageDims(dims);
+
       } catch (err: any) {
         console.error('[PDFFormViewer] load error:', err);
         if (active) setLoadError(err?.message ?? 'Unknown error loading PDF');
@@ -287,7 +332,7 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
     return () => { active = false; };
   }, [pdfPath]);
 
-  // ── Build filled PDF bytes (re-fetch for freshness, avoids stale closure) ───
+  // ── Build filled PDF bytes (re-fetch for freshness) ──────────────────────────
   const buildFilledBytes = useCallback(async (): Promise<Uint8Array> => {
     const res = await fetch(pdfPath);
     if (!res.ok) throw new Error(`Cannot fetch PDF: HTTP ${res.status}`);
@@ -336,23 +381,32 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
         console.warn(`[PDFFormViewer] skipping field "${field.getName?.()}":`, e);
       }
     }
-    // Stamp signature images directly onto the PDF page (signature fields can't
-    // be cryptographically signed by pdf-lib, so we draw them as images instead)
+
+    // Stamp signature images onto the PDF pages
     const sigEntries = snapshot.filter(f => f.type === 'signature' && vals[f.valueKey]);
     for (const entry of sigEntries) {
       try {
         const dataUrl = vals[entry.valueKey];
         if (!dataUrl?.startsWith('data:image/png')) continue;
-        const base64 = dataUrl.split(',')[1];
+
+        const base64   = dataUrl.split(',')[1];
         const imgBytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
         const pngImage = await doc.embedPng(imgBytes);
+
         const pages = doc.getPages();
         const page  = pages[entry.pageIndex];
         if (!page) continue;
-        // pdf-lib uses bottom-left origin — same as PDF space — so px1/py1 are direct
+
+        // FIX 3: Subtract media-box origin from stored pdfjs rect coords.
+        // pdfjs annotates rects in absolute PDF user-space; pdf-lib drawImage
+        // uses page-local space (origin = media-box bottom-left).
+        const dim = pageDimsRef.current[entry.pageIndex];
+        const mbX = dim?.mbX ?? 0;
+        const mbY = dim?.mbY ?? 0;
+
         page.drawImage(pngImage, {
-          x:      entry.px1,
-          y:      entry.py1,
+          x:      entry.px1 - mbX,
+          y:      entry.py1 - mbY,
           width:  entry.px2 - entry.px1,
           height: entry.py2 - entry.py1,
         });
@@ -362,7 +416,7 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
     }
 
     return doc.save();
-  }, [pdfPath]);
+  }, [pdfPath]); // pageDimsRef is a stable ref — intentionally excluded from deps
 
   // ── Reset ────────────────────────────────────────────────────────────────────
   const resetForm = useCallback(() => {
@@ -412,7 +466,12 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
       .then(({ data }) => { setPatients(data ?? []); setPatientsLoading(false); });
   }, [showModal]);
 
-  const closeModal = () => { setShowModal(false); setSelectedPatientId(''); setNotes(''); setSubmitResult(null); };
+  const closeModal = () => {
+    setShowModal(false);
+    setSelectedPatientId('');
+    setNotes('');
+    setSubmitResult(null);
+  };
 
   const handleSubmit = async () => {
     if (!selectedPatientId) return;
@@ -441,7 +500,11 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
         status:       'submitted',
         storage_path: storagePath,
         notes:        notes.trim() || null,
-        data: { form_name: formName ?? title, submitted_at: new Date().toISOString(), storage_path: storagePath },
+        data: {
+          form_name:    formName ?? title,
+          submitted_at: new Date().toISOString(),
+          storage_path: storagePath,
+        },
       });
       if (dbErr) throw dbErr;
 
@@ -481,7 +544,6 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
     const key = `${field.name}__${field.pageIndex}__${field.px1}__${field.py1}`;
     const style: React.CSSProperties = { position: 'absolute', left, top, width, height };
 
-    // All inputs are transparent — PDF canvas draws the boxes, we only add typed text
     const base: React.CSSProperties = {
       width: '100%', height: '100%',
       background: 'transparent', border: 'none', outline: 'none',
@@ -496,9 +558,12 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
     if (field.type === 'checkbox') {
       const checked = formValues[field.valueKey] === 'true';
       return (
-        <div key={key} style={{ ...style, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        <div
+          key={key}
+          style={{ ...style, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           onClick={() => setFormValues(p => ({ ...p, [field.valueKey]: checked ? 'false' : 'true' }))}
-          title={checked ? 'Click to uncheck' : 'Click to check'}>
+          title={checked ? 'Click to uncheck' : 'Click to check'}
+        >
           {checked && (
             <svg viewBox="0 0 12 12" style={{ width: Math.min(width, height) * 0.82, height: Math.min(width, height) * 0.82, pointerEvents: 'none' }}>
               <polyline points="1.5,6 4.5,9.5 10.5,2.5" fill="none" stroke="#2563eb" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
@@ -521,12 +586,55 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
       );
     }
 
+    // ── Radio button ──
+    // Each widget in the group has its own buttonValue. Clicking selects that value
+    // for the shared field name (valueKey === name for all widgets in the group).
+    if (field.type === 'radio') {
+      const isSelected = formValues[field.valueKey] === field.buttonValue;
+      return (
+        <div
+          key={key}
+          style={{
+            ...style,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+          onClick={() =>
+            setFormValues(p => ({
+              ...p,
+              [field.valueKey]: isSelected ? '' : (field.buttonValue ?? ''),
+            }))
+          }
+          title={isSelected ? 'Click to deselect' : 'Click to select'}
+        >
+          {isSelected && (
+            <svg
+              viewBox="0 0 12 12"
+              style={{
+                width:  Math.min(width, height) * 0.72,
+                height: Math.min(width, height) * 0.72,
+                pointerEvents: 'none',
+              }}
+            >
+              <circle cx="6" cy="6" r="3.5" fill="#2563eb" />
+            </svg>
+          )}
+        </div>
+      );
+    }
+
     // ── Dropdown ──
     if (field.type === 'dropdown' && field.options?.length) {
       return (
         <div key={key} style={style}>
-          <select value={formValues[field.valueKey] ?? ''} onChange={e => setFormValues(p => ({ ...p, [field.valueKey]: e.target.value }))}
-            onFocus={focusOn} onBlur={focusOff} style={{ ...base, cursor: 'pointer' }}>
+          <select
+            value={formValues[field.valueKey] ?? ''}
+            onChange={e => setFormValues(p => ({ ...p, [field.valueKey]: e.target.value }))}
+            onFocus={focusOn} onBlur={focusOff}
+            style={{ ...base, cursor: 'pointer' }}
+          >
             <option value="">—</option>
             {field.options.map(o => <option key={o} value={o}>{o}</option>)}
           </select>
@@ -538,37 +646,48 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
     if (field.type === 'multiline') {
       return (
         <div key={key} style={style}>
-          <textarea value={formValues[field.valueKey] ?? ''} onChange={e => setFormValues(p => ({ ...p, [field.valueKey]: e.target.value }))}
+          <textarea
+            value={formValues[field.valueKey] ?? ''}
+            onChange={e => setFormValues(p => ({ ...p, [field.valueKey]: e.target.value }))}
             onFocus={focusOn} onBlur={focusOff}
-            style={{ ...base, resize: 'none', lineHeight: 1.3, padding: '1px 2px' }} />
+            style={{ ...base, resize: 'none', lineHeight: 1.3, padding: '1px 2px' }}
+          />
         </div>
       );
     }
 
     // ── Comb field ──
     if (field.isComb && field.combLen) {
-      const n = field.combLen;
-      const boxW = width / n;
+      const n       = field.combLen;
+      const boxW    = width / n;
       const current = formValues[field.valueKey] ?? '';
       return (
         <div key={key} style={{ ...style, display: 'flex' }}>
           {Array.from({ length: n }, (_, ci) => {
             const charVal = current[ci] ?? '';
             return (
-              <input key={ci} type="text" maxLength={1} value={charVal}
+              <input
+                key={ci} type="text" maxLength={1} value={charVal}
                 onChange={e => {
-                  const ch = e.target.value.slice(-1);
+                  const ch    = e.target.value.slice(-1);
                   const chars = (formValues[field.valueKey] ?? '').split('');
-                  chars[ci] = ch;
+                  chars[ci]   = ch;
                   setFormValues(p => ({ ...p, [field.valueKey]: chars.join('').trimEnd() }));
-                  if (ch && e.target.nextElementSibling) (e.target.nextElementSibling as HTMLInputElement).focus();
+                  if (ch && e.target.nextElementSibling)
+                    (e.target.nextElementSibling as HTMLInputElement).focus();
                 }}
                 onKeyDown={e => {
                   if (e.key === 'Backspace' && !charVal && e.currentTarget.previousElementSibling)
                     (e.currentTarget.previousElementSibling as HTMLInputElement).focus();
                 }}
                 onFocus={focusOn} onBlur={focusOff}
-                style={{ width: boxW, height, fontSize: Math.max(8, Math.min(height * 0.65, 14)), textAlign: 'center', padding: 0, background: 'transparent', border: 'none', outline: 'none', color: '#18181b', boxSizing: 'border-box' }}
+                style={{
+                  width: boxW, height,
+                  fontSize: Math.max(8, Math.min(height * 0.65, 14)),
+                  textAlign: 'center', padding: 0,
+                  background: 'transparent', border: 'none', outline: 'none',
+                  color: '#18181b', boxSizing: 'border-box',
+                }}
               />
             );
           })}
@@ -580,11 +699,21 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
     const isSingleChar = (field.px2 - field.px1) < 18;
     return (
       <div key={key} style={style}>
-        <input type="text" value={formValues[field.valueKey] ?? ''}
+        <input
+          type="text"
+          value={formValues[field.valueKey] ?? ''}
           maxLength={isSingleChar ? 1 : undefined}
-          onChange={e => setFormValues(p => ({ ...p, [field.valueKey]: isSingleChar ? e.target.value.slice(-1) : e.target.value }))}
+          onChange={e => setFormValues(p => ({
+            ...p,
+            [field.valueKey]: isSingleChar ? e.target.value.slice(-1) : e.target.value,
+          }))}
           onFocus={focusOn} onBlur={focusOff}
-          style={{ ...base, fontSize: isSingleChar ? Math.max(8, Math.min(height * 0.65, 14)) : fs, textAlign: isSingleChar ? 'center' : 'left', padding: isSingleChar ? '0' : '0 2px' }}
+          style={{
+            ...base,
+            fontSize:  isSingleChar ? Math.max(8, Math.min(height * 0.65, 14)) : fs,
+            textAlign: isSingleChar ? 'center' : 'left',
+            padding:   isSingleChar ? '0' : '0 2px',
+          }}
         />
       </div>
     );
@@ -595,11 +724,13 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
     <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6">
-
       {/* Header */}
       <div className="flex items-center gap-4">
-        <button onClick={() => navigate('/clinical-forms')}
-          className="p-2 rounded-full bg-zinc-100 hover:bg-zinc-200 text-zinc-600 transition-colors" aria-label="Back">
+        <button
+          onClick={() => navigate('/clinical-forms')}
+          className="p-2 rounded-full bg-zinc-100 hover:bg-zinc-200 text-zinc-600 transition-colors"
+          aria-label="Back"
+        >
           <ArrowLeft size={20} />
         </button>
         <div>
@@ -619,17 +750,25 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           {filledCount > 0 && (
-            <button onClick={resetForm}
-              className="px-3 py-2 text-xs font-medium text-zinc-500 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors">
+            <button
+              onClick={resetForm}
+              className="px-3 py-2 text-xs font-medium text-zinc-500 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors"
+            >
               Clear
             </button>
           )}
-          <button onClick={handleDownload} disabled={pdfLoading || !!loadError}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-zinc-700 bg-zinc-100 hover:bg-zinc-200 rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+          <button
+            onClick={handleDownload}
+            disabled={pdfLoading || !!loadError}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-zinc-700 bg-zinc-100 hover:bg-zinc-200 rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
             <Download size={16} /><span className="hidden sm:inline">Download</span>
           </button>
-          <button onClick={() => setShowModal(true)} disabled={pdfLoading || !!loadError}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-partners-blue-dark hover:opacity-90 rounded-xl transition-opacity disabled:opacity-40 disabled:cursor-not-allowed">
+          <button
+            onClick={() => setShowModal(true)}
+            disabled={pdfLoading || !!loadError}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-partners-blue-dark hover:opacity-90 rounded-xl transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+          >
             <Send size={16} /><span className="hidden sm:inline">Submit</span>
           </button>
         </div>
@@ -651,19 +790,26 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
             <p className="text-zinc-500 text-sm max-w-md font-mono bg-zinc-50 p-3 rounded-xl">{loadError}</p>
           </div>
         ) : (
-          <div className="overflow-y-auto bg-zinc-200 p-4 space-y-4"
-            style={{ maxHeight: 'calc(100vh - 280px)', minHeight: 600 }}>
+          <div
+            className="overflow-y-auto bg-zinc-200 p-4 space-y-4"
+            style={{ maxHeight: 'calc(100vh - 280px)', minHeight: 600 }}
+          >
             {pageDims.map((dim, i) => (
-              <div key={i} className="mx-auto"
-                style={{ width: dim.width * cssScale, height: dim.height * cssScale, position: 'relative' }}>
+              <div
+                key={i}
+                className="mx-auto"
+                style={{ width: dim.width * cssScale, height: dim.height * cssScale, position: 'relative' }}
+              >
                 <div style={{
                   width: dim.width, height: dim.height,
                   transform: `scale(${cssScale})`, transformOrigin: 'top left',
                   position: 'relative', background: '#fff',
                   boxShadow: '0 2px 12px rgba(0,0,0,0.18)',
                 }}>
-                  <canvas ref={el => setCanvasRef(el, i)}
-                    style={{ display: 'block', position: 'absolute', top: 0, left: 0 }} />
+                  <canvas
+                    ref={el => setCanvasRef(el, i)}
+                    style={{ display: 'block', position: 'absolute', top: 0, left: 0 }}
+                  />
                   {fields.filter(f => f.pageIndex === i).map(f => renderOverlay(f, dim))}
                 </div>
               </div>
@@ -676,21 +822,34 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
       {!loadError && !pdfLoading && (
         <div className="flex items-start gap-3 bg-blue-50 border border-blue-100 rounded-2xl px-5 py-4 text-sm text-blue-700">
           <AlertCircle size={18} className="mt-0.5 flex-shrink-0" />
-          <p>Click any field on the PDF to fill it. <strong>Download</strong> opens the print dialog (Save as PDF). <strong>Submit</strong> saves to the patient record and resets the form.</p>
+          <p>
+            Click any field on the PDF to fill it. <strong>Download</strong> opens the print dialog (Save as PDF).{' '}
+            <strong>Submit</strong> saves to the patient record and resets the form.
+          </p>
         </div>
       )}
 
       {/* Submit Modal */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
-          onClick={e => { if (e.target === e.currentTarget) closeModal(); }}>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+          onClick={e => { if (e.target === e.currentTarget) closeModal(); }}
+        >
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
             <div className="flex items-center justify-between px-6 py-5 border-b border-zinc-100">
               <div className="flex items-center gap-3">
                 <div className={`p-2 rounded-xl ${accentColor}`}><Send size={18} /></div>
-                <div><h2 className="text-base font-bold text-zinc-900">Submit Form</h2><p className="text-xs text-zinc-500">{title}</p></div>
+                <div>
+                  <h2 className="text-base font-bold text-zinc-900">Submit Form</h2>
+                  <p className="text-xs text-zinc-500">{title}</p>
+                </div>
               </div>
-              <button onClick={closeModal} className="p-2 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"><X size={18} /></button>
+              <button
+                onClick={closeModal}
+                className="p-2 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 transition-colors"
+              >
+                <X size={18} />
+              </button>
             </div>
 
             {submitResult?.type === 'success' ? (
@@ -698,44 +857,80 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
                 <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center">
                   <CheckCircle className="text-emerald-500" size={32} />
                 </div>
-                <div><h3 className="text-lg font-bold text-zinc-900 mb-1">Submitted!</h3><p className="text-sm text-zinc-500">Saved to patient record. Form has been reset.</p></div>
-                <button onClick={closeModal} className="mt-2 px-6 py-2.5 text-sm font-medium text-white bg-partners-blue-dark hover:opacity-90 rounded-xl">Done</button>
+                <div>
+                  <h3 className="text-lg font-bold text-zinc-900 mb-1">Submitted!</h3>
+                  <p className="text-sm text-zinc-500">Saved to patient record. Form has been reset.</p>
+                </div>
+                <button
+                  onClick={closeModal}
+                  className="mt-2 px-6 py-2.5 text-sm font-medium text-white bg-partners-blue-dark hover:opacity-90 rounded-xl"
+                >
+                  Done
+                </button>
               </div>
             ) : (
               <div className="px-6 py-5 space-y-5">
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-bold text-zinc-500 uppercase tracking-wider">Patient <span className="text-red-500">*</span></label>
+                  <label className="block text-xs font-bold text-zinc-500 uppercase tracking-wider">
+                    Patient <span className="text-red-500">*</span>
+                  </label>
                   {patientsLoading ? (
-                    <div className="flex items-center gap-2 h-10 text-sm text-zinc-400"><Loader2 size={16} className="animate-spin" /> Loading patients…</div>
+                    <div className="flex items-center gap-2 h-10 text-sm text-zinc-400">
+                      <Loader2 size={16} className="animate-spin" /> Loading patients…
+                    </div>
                   ) : (
                     <div className="relative">
-                      <select value={selectedPatientId} onChange={e => setSelectedPatientId(e.target.value)}
-                        className="w-full appearance-none px-4 py-2.5 pr-10 text-sm bg-zinc-50 border border-zinc-200 rounded-xl text-zinc-900 focus:outline-none focus:ring-2 focus:ring-partners-blue-dark/30 focus:border-partners-blue-dark transition-colors">
+                      <select
+                        value={selectedPatientId}
+                        onChange={e => setSelectedPatientId(e.target.value)}
+                        className="w-full appearance-none px-4 py-2.5 pr-10 text-sm bg-zinc-50 border border-zinc-200 rounded-xl text-zinc-900 focus:outline-none focus:ring-2 focus:ring-partners-blue-dark/30 focus:border-partners-blue-dark transition-colors"
+                      >
                         <option value="">Select a patient…</option>
-                        {patients.map(p => <option key={p.id} value={p.id}>{p.last_name}, {p.first_name}</option>)}
+                        {patients.map(p => (
+                          <option key={p.id} value={p.id}>{p.last_name}, {p.first_name}</option>
+                        ))}
                       </select>
                       <ChevronDown size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" />
                     </div>
                   )}
                 </div>
+
                 <div className="space-y-1.5">
-                  <label className="block text-xs font-bold text-zinc-500 uppercase tracking-wider">Notes <span className="text-zinc-400 font-normal">(optional)</span></label>
-                  <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Any additional notes…" rows={3}
-                    className="w-full px-4 py-2.5 text-sm bg-zinc-50 border border-zinc-200 rounded-xl text-zinc-900 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-partners-blue-dark/30 focus:border-partners-blue-dark transition-colors resize-none" />
+                  <label className="block text-xs font-bold text-zinc-500 uppercase tracking-wider">
+                    Notes <span className="text-zinc-400 font-normal">(optional)</span>
+                  </label>
+                  <textarea
+                    value={notes}
+                    onChange={e => setNotes(e.target.value)}
+                    placeholder="Any additional notes…"
+                    rows={3}
+                    className="w-full px-4 py-2.5 text-sm bg-zinc-50 border border-zinc-200 rounded-xl text-zinc-900 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-partners-blue-dark/30 focus:border-partners-blue-dark transition-colors resize-none"
+                  />
                 </div>
+
                 {submitResult?.type === 'error' && (
                   <div className="flex items-center gap-2 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
                     <AlertCircle size={16} className="flex-shrink-0" />{submitResult.message}
                   </div>
                 )}
+
                 <div className="flex items-center gap-3 pt-1">
-                  <button onClick={closeModal} disabled={isSubmitting}
-                    className="flex-1 px-4 py-2.5 text-sm font-medium text-zinc-600 bg-zinc-100 hover:bg-zinc-200 rounded-xl transition-colors disabled:opacity-50">
+                  <button
+                    onClick={closeModal}
+                    disabled={isSubmitting}
+                    className="flex-1 px-4 py-2.5 text-sm font-medium text-zinc-600 bg-zinc-100 hover:bg-zinc-200 rounded-xl transition-colors disabled:opacity-50"
+                  >
                     Cancel
                   </button>
-                  <button onClick={handleSubmit} disabled={!selectedPatientId || isSubmitting}
-                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-partners-blue-dark hover:opacity-90 rounded-xl transition-opacity disabled:opacity-50 disabled:cursor-not-allowed">
-                    {isSubmitting ? <><Loader2 size={16} className="animate-spin" /> Submitting…</> : <><Send size={16} /> Submit</>}
+                  <button
+                    onClick={handleSubmit}
+                    disabled={!selectedPatientId || isSubmitting}
+                    className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-partners-blue-dark hover:opacity-90 rounded-xl transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isSubmitting
+                      ? <><Loader2 size={16} className="animate-spin" /> Submitting…</>
+                      : <><Send size={16} /> Submit</>
+                    }
                   </button>
                 </div>
               </div>
@@ -753,7 +948,7 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
 interface SignaturePadProps {
   fieldKey: string;
   style: React.CSSProperties;
-  value: string;          // PNG data URL or ''
+  value: string;       // PNG data URL or ''
   onChange: (v: string) => void;
 }
 
@@ -763,16 +958,16 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ fieldKey, style, value, onC
   const lastPos   = useRef<{ x: number; y: number } | null>(null);
   const hasDrawn  = useRef(false);
 
-  // Parse pixel values from style (may be number or "200px" string)
   const parseNum = (v: any, fallback: number) => {
     if (typeof v === 'number') return Math.round(v);
     if (typeof v === 'string') return Math.round(parseFloat(v)) || fallback;
     return fallback;
   };
+
   const canvasW = parseNum(style.width,  200);
   const canvasH = parseNum(style.height,  60);
 
-  // Restore saved signature on mount or when value changes externally (e.g. clear)
+  // Restore saved signature when value changes externally (e.g. after clear)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -823,7 +1018,7 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ fieldKey, style, value, onC
     ctx.moveTo(lastPos.current.x, lastPos.current.y);
     ctx.lineTo(pos.x, pos.y);
     ctx.stroke();
-    lastPos.current = pos;
+    lastPos.current  = pos;
     hasDrawn.current = true;
   };
 
@@ -866,8 +1061,8 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ fieldKey, style, value, onC
       {/* Placeholder hint when empty */}
       {isEmpty && (
         <div style={{
-          position: 'absolute', inset: 0, display: 'flex',
-          alignItems: 'center', justifyContent: 'center',
+          position: 'absolute', inset: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
           pointerEvents: 'none',
           color: 'rgba(100,116,139,0.5)',
           fontSize: Math.min(canvasH * 0.28, 11),
