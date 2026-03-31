@@ -2,9 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { supabase, Profile, UserRole } from '../services/supabase';
 import { Button } from '../components/Button';
 import { ConfirmationModal } from '../components/ConfirmationModal';
-import { UserPlus, Shield, Mail, User as UserIcon, Trash2, AlertCircle, Eye, EyeOff, Download, ChevronDown } from 'lucide-react';
+import {
+  UserPlus, Shield, Mail, User as UserIcon, Trash2, AlertCircle,
+  Eye, EyeOff, Download, ChevronDown, Pencil, CheckCircle
+} from 'lucide-react';
 
-// ── Role definitions for access export ─────────────────────────────────────
+// ── Role definitions ─────────────────────────────────────────────────────────
 const ROLE_ACCESS: Record<string, { label: string; color: string; access: string[] }> = {
   admin: {
     label: 'Admin',
@@ -60,8 +63,12 @@ const ROLE_ACCESS: Record<string, { label: string; color: string; access: string
   },
 };
 
-// ── Status Dropdown with smart positioning ───────────────────────────────────
-const StatusDropdown: React.FC<{ user: Profile; onToggle: (user: Profile, status: boolean) => void; isLoading: boolean }> = ({ user, onToggle, isLoading }) => {
+// ── Status Dropdown ───────────────────────────────────────────────────────────
+const StatusDropdown: React.FC<{
+  user: Profile;
+  onToggle: (user: Profile, status: boolean) => void;
+  isLoading: boolean;
+}> = ({ user, onToggle, isLoading }) => {
   const [open, setOpen] = useState(false);
   const [dropUp, setDropUp] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -69,13 +76,10 @@ const StatusDropdown: React.FC<{ user: Profile; onToggle: (user: Profile, status
 
   useEffect(() => {
     if (!open) return;
-    // Decide whether to open up or down
     if (btnRef.current) {
       const rect = btnRef.current.getBoundingClientRect();
-      const spaceBelow = window.innerHeight - rect.bottom;
-      setDropUp(spaceBelow < 100);
+      setDropUp(window.innerHeight - rect.bottom < 100);
     }
-    // Close on outside click
     const handler = (e: MouseEvent) => {
       if (
         btnRef.current && !btnRef.current.contains(e.target as Node) &&
@@ -132,53 +136,129 @@ const StatusDropdown: React.FC<{ user: Profile; onToggle: (user: Profile, status
 export const UserManagement: React.FC = () => {
   const [users, setUsers] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Modal visibility
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
   const [showRoleAccessModal, setShowRoleAccessModal] = useState(false);
+
+  // Delete
   const [userToDelete, setUserToDelete] = useState<{ id: string; name: string } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Status toggle
   const [updatingStatus, setUpdatingStatus] = useState<string | null>(null);
 
-  // Form state
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [fullName, setFullName] = useState('');
-  const [role, setRole] = useState<UserRole>('care_manager');
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  // ── Create form state ──────────────────────────────────────────────────────
+  const [createEmail, setCreateEmail] = useState('');
+  const [createPassword, setCreatePassword] = useState('');
+  const [showCreatePassword, setShowCreatePassword] = useState(false);
+  const [createFullName, setCreateFullName] = useState('');
+  const [createRole, setCreateRole] = useState<UserRole>('care_manager');
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  // ── Edit form state ────────────────────────────────────────────────────────
+  const [editUser, setEditUser] = useState<Profile | null>(null);
+  const [editFullName, setEditFullName] = useState('');
+  const [editRole, setEditRole] = useState<UserRole>('care_manager');
+  const [editPassword, setEditPassword] = useState('');
+  const [showEditPassword, setShowEditPassword] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editSuccess, setEditSuccess] = useState(false);
 
   useEffect(() => { fetchUsers(); }, []);
 
   const fetchUsers = async () => {
     setLoading(true);
-    const { data } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
+    const { data } = await supabase
+      .from('profiles')
+      .select('*')
+      .order('created_at', { ascending: false });
     if (data) setUsers(data);
     setLoading(false);
   };
 
+  // ── Open edit modal, pre-fill fields ──────────────────────────────────────
+  const openEditModal = (user: Profile) => {
+    setEditUser(user);
+    setEditFullName(user.full_name || '');
+    setEditRole(user.role as UserRole);
+    setEditPassword('');
+    setEditError(null);
+    setEditSuccess(false);
+    setShowEditPassword(false);
+    setShowEditModal(true);
+  };
+
+  // ── Create user ───────────────────────────────────────────────────────────
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitting(true);
-    setError(null);
+    setCreating(true);
+    setCreateError(null);
     try {
       const response = await fetch('/api/admin/create-user', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, fullName, role }),
+        body: JSON.stringify({ email: createEmail, password: createPassword, fullName: createFullName, role: createRole }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Failed to create user');
       setShowAddModal(false);
-      setEmail(''); setPassword(''); setFullName('');
+      setCreateEmail(''); setCreatePassword(''); setCreateFullName('');
       fetchUsers();
     } catch (err: any) {
-      setError(err.message);
+      setCreateError(err.message);
     } finally {
-      setSubmitting(false);
+      setCreating(false);
     }
   };
 
+  // ── Edit user ─────────────────────────────────────────────────────────────
+  const handleEditUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editUser) return;
+    setEditing(true);
+    setEditError(null);
+    setEditSuccess(false);
+    try {
+      const response = await fetch('/api/admin/edit-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: editUser.id,
+          fullName: editFullName,
+          role: editRole,
+          password: editPassword.trim() || undefined,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Failed to update user');
+
+      // Update local state immediately
+      setUsers(prev =>
+        prev.map(u =>
+          u.id === editUser.id
+            ? { ...u, full_name: editFullName, role: editRole as UserRole }
+            : u
+        )
+      );
+      setEditSuccess(true);
+      // Auto-close after 1.5s on success
+      setTimeout(() => {
+        setShowEditModal(false);
+        setEditUser(null);
+      }, 1500);
+    } catch (err: any) {
+      setEditError(err.message);
+    } finally {
+      setEditing(false);
+    }
+  };
+
+  // ── Delete user ───────────────────────────────────────────────────────────
   const handleDeleteUser = async (userId: string) => {
     setDeleteError(null);
     setIsDeleting(true);
@@ -199,6 +279,7 @@ export const UserManagement: React.FC = () => {
     }
   };
 
+  // ── Toggle status ─────────────────────────────────────────────────────────
   const handleToggleStatus = async (user: Profile, newStatus: boolean) => {
     setUpdatingStatus(user.id);
     const { error } = await supabase
@@ -207,13 +288,12 @@ export const UserManagement: React.FC = () => {
       .eq('id', user.id);
 
     if (!error) {
-      // If deactivating, also sign them out by invalidating their sessions
       if (!newStatus) {
         await fetch('/api/admin/deactivate-user', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ userId: user.id }),
-        }).catch(() => {}); // best-effort, don't block UI
+        }).catch(() => {});
       }
       setUsers(prev => prev.map(u => u.id === user.id ? { ...u, is_active: newStatus } : u));
     }
@@ -221,7 +301,12 @@ export const UserManagement: React.FC = () => {
   };
 
   const handleExportRoleAccess = () => {
-    const lines: string[] = ['PARTNERS HOME NURSING SERVICES', 'ROLE ACCESS PERMISSIONS', `Generated: ${new Date().toLocaleDateString()}`, '='.repeat(60), ''];
+    const lines: string[] = [
+      'PARTNERS HOME NURSING SERVICES',
+      'ROLE ACCESS PERMISSIONS',
+      `Generated: ${new Date().toLocaleDateString()}`,
+      '='.repeat(60), '',
+    ];
     Object.entries(ROLE_ACCESS).forEach(([, { label, access }]) => {
       lines.push(`ROLE: ${label.toUpperCase()}`);
       lines.push('-'.repeat(40));
@@ -237,14 +322,18 @@ export const UserManagement: React.FC = () => {
 
   const roleFmt = (r: string) => ROLE_ACCESS[r]?.label || r.replace('_', ' ');
 
+  const inputClass = 'w-full pl-10 pr-4 py-2 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-partners-blue-dark outline-none transition-all text-sm';
+
   return (
     <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-8">
+
+      {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4">
         <div>
           <h2 className="text-2xl md:text-3xl font-bold text-partners-blue-dark italic">User Management</h2>
           <p className="text-sm md:text-base text-partners-gray">Manage clinical staff and system access roles.</p>
         </div>
-        <div className="flex gap-3 w-full sm:w-auto">
+        <div className="flex gap-3 w-full sm:w-auto flex-wrap">
           <Button variant="secondary" className="rounded-full px-4" onClick={() => setShowRoleAccessModal(true)}>
             <Shield className="w-4 h-4 mr-2" /> Role Access
           </Button>
@@ -257,6 +346,7 @@ export const UserManagement: React.FC = () => {
         </div>
       </div>
 
+      {/* Delete error banner */}
       {deleteError && (
         <div className="p-4 bg-red-50 border border-red-100 rounded-xl flex items-center gap-3 text-red-600">
           <AlertCircle size={18} />
@@ -293,8 +383,8 @@ export const UserManagement: React.FC = () => {
                 <tr key={user.id} className="hover:bg-zinc-50 transition-colors group">
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
-                      <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${user.is_active ? 'bg-partners-blue-dark/10 text-partners-blue-dark' : 'bg-zinc-100 text-zinc-400'}`}>
-                        {user.full_name?.[0]}
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shrink-0 ${user.is_active ? 'bg-partners-blue-dark/10 text-partners-blue-dark' : 'bg-zinc-100 text-zinc-400'}`}>
+                        {user.full_name?.[0]?.toUpperCase()}
                       </div>
                       <div>
                         <p className="font-bold text-zinc-900">{user.full_name}</p>
@@ -308,20 +398,27 @@ export const UserManagement: React.FC = () => {
                     </span>
                   </td>
                   <td className="px-6 py-4">
-                    <StatusDropdown
-                      user={user}
-                      onToggle={handleToggleStatus}
-                      isLoading={updatingStatus === user.id}
-                    />
+                    <StatusDropdown user={user} onToggle={handleToggleStatus} isLoading={updatingStatus === user.id} />
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <Button
-                      variant="ghost" size="sm"
-                      className="text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={() => setUserToDelete({ id: user.id, name: user.full_name })}
-                    >
-                      <Trash2 size={16} />
-                    </Button>
+                    <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button
+                        variant="ghost" size="sm"
+                        className="text-partners-blue-dark hover:bg-partners-blue-dark/10"
+                        onClick={() => openEditModal(user)}
+                        title="Edit user"
+                      >
+                        <Pencil size={15} />
+                      </Button>
+                      <Button
+                        variant="ghost" size="sm"
+                        className="text-red-500 hover:bg-red-50"
+                        onClick={() => setUserToDelete({ id: user.id, name: user.full_name })}
+                        title="Delete user"
+                      >
+                        <Trash2 size={15} />
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))
@@ -340,34 +437,35 @@ export const UserManagement: React.FC = () => {
           <div key={user.id} className="bg-white p-4 rounded-3xl border border-zinc-200 shadow-sm space-y-4">
             <div className="flex justify-between items-start">
               <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold ${user.is_active ? 'bg-partners-blue-dark/10 text-partners-blue-dark' : 'bg-zinc-100 text-zinc-400'}`}>
-                  {user.full_name?.[0]}
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${user.is_active ? 'bg-partners-blue-dark/10 text-partners-blue-dark' : 'bg-zinc-100 text-zinc-400'}`}>
+                  {user.full_name?.[0]?.toUpperCase()}
                 </div>
                 <div>
                   <p className="font-bold text-zinc-900">{user.full_name}</p>
                   <p className="text-xs text-zinc-500">{user.email}</p>
                 </div>
               </div>
-              <Button variant="ghost" size="sm" className="text-red-500"
-                onClick={() => setUserToDelete({ id: user.id, name: user.full_name })}>
-                <Trash2 size={16} />
-              </Button>
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="sm" className="text-partners-blue-dark" onClick={() => openEditModal(user)}>
+                  <Pencil size={15} />
+                </Button>
+                <Button variant="ghost" size="sm" className="text-red-500"
+                  onClick={() => setUserToDelete({ id: user.id, name: user.full_name })}>
+                  <Trash2 size={15} />
+                </Button>
+              </div>
             </div>
             <div className="flex justify-between items-center pt-2 border-t border-zinc-50">
               <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${ROLE_ACCESS[user.role]?.color || 'bg-zinc-100 text-zinc-600'}`}>
                 {roleFmt(user.role)}
               </span>
-              <StatusDropdown
-                user={user}
-                onToggle={handleToggleStatus}
-                isLoading={updatingStatus === user.id}
-              />
+              <StatusDropdown user={user} onToggle={handleToggleStatus} isLoading={updatingStatus === user.id} />
             </div>
           </div>
         ))}
       </div>
 
-      {/* Add User Modal */}
+      {/* ── Create User Modal ──────────────────────────────────────────────── */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-3xl shadow-2xl border border-zinc-200 w-full max-w-md p-6 sm:p-8">
@@ -377,37 +475,39 @@ export const UserManagement: React.FC = () => {
                 <label className="text-sm font-medium text-zinc-700">Full Name</label>
                 <div className="relative">
                   <UserIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={18} />
-                  <input type="text" value={fullName} onChange={e => setFullName(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-partners-blue-dark outline-none"
-                    placeholder="Dr. Jane Smith" required />
+                  <input type="text" value={createFullName} onChange={e => setCreateFullName(e.target.value)}
+                    className={inputClass} placeholder="Dr. Jane Smith" required />
                 </div>
               </div>
               <div className="space-y-1">
                 <label className="text-sm font-medium text-zinc-700">Email Address</label>
                 <div className="relative">
                   <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={18} />
-                  <input type="email" value={email} onChange={e => setEmail(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-partners-blue-dark outline-none"
-                    placeholder="doctor@clinic.com" required />
+                  <input type="email" value={createEmail} onChange={e => setCreateEmail(e.target.value)}
+                    className={inputClass} placeholder="doctor@clinic.com" required />
                 </div>
               </div>
               <div className="space-y-1">
                 <label className="text-sm font-medium text-zinc-700">Initial Password</label>
                 <div className="relative">
                   <Shield className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={18} />
-                  <input type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)}
-                    className="w-full pl-10 pr-12 py-2 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-partners-blue-dark outline-none"
-                    placeholder="••••••••" required />
-                  <button type="button" onClick={() => setShowPassword(!showPassword)}
+                  <input
+                    type={showCreatePassword ? 'text' : 'password'}
+                    value={createPassword}
+                    onChange={e => setCreatePassword(e.target.value)}
+                    className="w-full pl-10 pr-12 py-2 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-partners-blue-dark outline-none text-sm"
+                    placeholder="••••••••" required
+                  />
+                  <button type="button" onClick={() => setShowCreatePassword(!showCreatePassword)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 p-1">
-                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    {showCreatePassword ? <EyeOff size={18} /> : <Eye size={18} />}
                   </button>
                 </div>
               </div>
               <div className="space-y-1">
                 <label className="text-sm font-medium text-zinc-700">System Role</label>
-                <select value={role} onChange={e => setRole(e.target.value as UserRole)}
-                  className="w-full px-4 py-2 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-partners-blue-dark outline-none bg-white">
+                <select value={createRole} onChange={e => setCreateRole(e.target.value as UserRole)}
+                  className="w-full px-4 py-2 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-partners-blue-dark outline-none bg-white text-sm">
                   <option value="admin">Admin</option>
                   <option value="manager">Manager</option>
                   <option value="care_manager">Care Manager</option>
@@ -416,17 +516,134 @@ export const UserManagement: React.FC = () => {
                   <option value="reviewer">Reviewer</option>
                 </select>
               </div>
-              {error && <p className="text-sm text-red-600 bg-red-50 p-3 rounded-lg">{error}</p>}
+              {createError && <p className="text-sm text-red-600 bg-red-50 p-3 rounded-lg">{createError}</p>}
               <div className="flex gap-3 pt-4">
                 <Button type="button" variant="secondary" className="flex-1" onClick={() => setShowAddModal(false)}>Cancel</Button>
-                <Button type="submit" className="flex-1" disabled={submitting}>{submitting ? 'Creating...' : 'Create User'}</Button>
+                <Button type="submit" className="flex-1" disabled={creating}>{creating ? 'Creating...' : 'Create User'}</Button>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {/* Role Access Modal */}
+      {/* ── Edit User Modal ────────────────────────────────────────────────── */}
+      {showEditModal && editUser && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-3xl shadow-2xl border border-zinc-200 w-full max-w-md p-6 sm:p-8">
+
+            {/* Modal header */}
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 rounded-full bg-partners-blue-dark/10 text-partners-blue-dark flex items-center justify-center font-bold text-sm shrink-0">
+                {editUser.full_name?.[0]?.toUpperCase()}
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-zinc-900">Edit User</h3>
+                <p className="text-xs text-zinc-400">{editUser.email}</p>
+              </div>
+            </div>
+
+            <form onSubmit={handleEditUser} className="space-y-4">
+              {/* Full Name */}
+              <div className="space-y-1">
+                <label className="text-sm font-medium text-zinc-700">Full Name</label>
+                <div className="relative">
+                  <UserIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={18} />
+                  <input
+                    type="text"
+                    value={editFullName}
+                    onChange={e => setEditFullName(e.target.value)}
+                    className={inputClass}
+                    placeholder="Full name"
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* Role */}
+              <div className="space-y-1">
+                <label className="text-sm font-medium text-zinc-700">System Role</label>
+                <div className="relative">
+                  <Shield className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={18} />
+                  <select
+                    value={editRole}
+                    onChange={e => setEditRole(e.target.value as UserRole)}
+                    className="w-full pl-10 pr-4 py-2 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-partners-blue-dark outline-none bg-white text-sm"
+                  >
+                    <option value="admin">Admin</option>
+                    <option value="manager">Manager</option>
+                    <option value="care_manager">Care Manager</option>
+                    <option value="nurse">Nurse</option>
+                    <option value="frontdesk">Front Desk</option>
+                    <option value="reviewer">Reviewer</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* New Password (optional) */}
+              <div className="space-y-1">
+                <label className="text-sm font-medium text-zinc-700">
+                  New Password
+                  <span className="ml-2 text-xs text-zinc-400 font-normal">(leave blank to keep current)</span>
+                </label>
+                <div className="relative">
+                  <Shield className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" size={18} />
+                  <input
+                    type={showEditPassword ? 'text' : 'password'}
+                    value={editPassword}
+                    onChange={e => setEditPassword(e.target.value)}
+                    className="w-full pl-10 pr-12 py-2 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-partners-blue-dark outline-none text-sm"
+                    placeholder="••••••••"
+                    minLength={editPassword.length > 0 ? 6 : undefined}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowEditPassword(!showEditPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 p-1"
+                  >
+                    {showEditPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                </div>
+                {editPassword.length > 0 && editPassword.length < 6 && (
+                  <p className="text-xs text-amber-600">Password must be at least 6 characters</p>
+                )}
+              </div>
+
+              {/* Feedback */}
+              {editError && (
+                <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-100 rounded-xl">
+                  <AlertCircle size={16} className="text-red-500 shrink-0" />
+                  <p className="text-sm text-red-600">{editError}</p>
+                </div>
+              )}
+              {editSuccess && (
+                <div className="flex items-center gap-2 p-3 bg-emerald-50 border border-emerald-100 rounded-xl">
+                  <CheckCircle size={16} className="text-emerald-500 shrink-0" />
+                  <p className="text-sm text-emerald-700 font-medium">User updated successfully!</p>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex gap-3 pt-4">
+                <Button
+                  type="button" variant="secondary" className="flex-1"
+                  onClick={() => { setShowEditModal(false); setEditUser(null); }}
+                  disabled={editing}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit" className="flex-1"
+                  disabled={editing || editSuccess || (editPassword.length > 0 && editPassword.length < 6)}
+                >
+                  {editing ? 'Saving...' : 'Save Changes'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Role Access Modal ──────────────────────────────────────────────── */}
       {showRoleAccessModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-3xl shadow-2xl border border-zinc-200 w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
@@ -438,7 +655,7 @@ export const UserManagement: React.FC = () => {
                 <Button variant="secondary" size="sm" onClick={handleExportRoleAccess}>
                   <Download size={14} className="mr-1" /> Export
                 </Button>
-                <button onClick={() => setShowRoleAccessModal(false)} className="text-zinc-400 hover:text-zinc-600 p-1">✕</button>
+                <button onClick={() => setShowRoleAccessModal(false)} className="text-zinc-400 hover:text-zinc-600 p-1 text-lg leading-none">✕</button>
               </div>
             </div>
             <div className="overflow-y-auto p-6 space-y-4">
@@ -463,12 +680,15 @@ export const UserManagement: React.FC = () => {
         </div>
       )}
 
+      {/* ── Delete Confirmation ────────────────────────────────────────────── */}
       <ConfirmationModal
-        isOpen={!!userToDelete} onClose={() => setUserToDelete(null)}
+        isOpen={!!userToDelete}
+        onClose={() => setUserToDelete(null)}
         onConfirm={() => userToDelete && handleDeleteUser(userToDelete.id)}
         title="Delete User"
         message={`Are you sure you want to delete ${userToDelete?.name}? This will permanently remove their access.`}
-        confirmText="Delete User" isLoading={isDeleting}
+        confirmText="Delete User"
+        isLoading={isDeleting}
       />
     </div>
   );
