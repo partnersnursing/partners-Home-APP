@@ -86,6 +86,7 @@ export const HomeSafetyInspection: React.FC = () => {
   const { profile } = useAuth();
   const [searchParams] = useSearchParams();
   const initialPatientId = searchParams.get('patientId');
+  const editId = searchParams.get('id');
 
   const [patients, setPatients] = useState<any[]>([]);
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(initialPatientId);
@@ -97,6 +98,7 @@ export const HomeSafetyInspection: React.FC = () => {
     register,
     handleSubmit,
     setValue,
+    watch,
     reset,
     getValues,
     formState: { errors, isSubmitting },
@@ -139,6 +141,25 @@ export const HomeSafetyInspection: React.FC = () => {
       },
     },
   });
+
+  // Load existing submission when opened via View Form
+  useEffect(() => {
+    if (editId) {
+      const fetchSubmission = async () => {
+        try {
+          const { data, error } = await supabase
+            .from('form_responses')
+            .select('*')
+            .eq('id', editId)
+            .single();
+          if (data && !error) reset(data.data);
+        } catch (err) {
+          console.error('HomeSafetyInspection: Error fetching submission:', err);
+        }
+      };
+      fetchSubmission();
+    }
+  }, [editId, reset]);
 
   useEffect(() => {
     const fetchFormId = async () => {
@@ -487,6 +508,7 @@ export const HomeSafetyInspection: React.FC = () => {
             <SignaturePad
               label="Inspector Signature"
               onSave={(sig) => setValue('signature', sig, { shouldValidate: true })}
+              initialValue={watch('signature')}
             />
             {errors.signature && (
               <p className="text-xs text-red-500 mt-1">{errors.signature.message}</p>
