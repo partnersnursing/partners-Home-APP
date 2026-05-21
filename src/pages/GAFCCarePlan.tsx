@@ -118,6 +118,7 @@ export const GAFCCarePlan: React.FC = () => {
   const { profile } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const urlPatientId = searchParams.get('patientId');
+  const editId = searchParams.get('id');
   const [patientId, setPatientId] = useState<string | null>(urlPatientId);
   const [patients, setPatients] = useState<any[]>([]);
   const [isLoadingPatients, setIsLoadingPatients] = useState(false);
@@ -162,6 +163,28 @@ export const GAFCCarePlan: React.FC = () => {
       }
     }
   });
+
+  // Load existing submission when opened via View Form
+  useEffect(() => {
+    if (editId) {
+      const fetchSubmission = async () => {
+        try {
+          const { data, error } = await supabase
+            .from('form_responses')
+            .select('*')
+            .eq('id', editId)
+            .single();
+          if (data && !error) {
+            reset(data.data);
+            if (data.patient_id) setPatientId(data.patient_id);
+          }
+        } catch (err) {
+          console.error('GAFCCarePlan: Error fetching submission:', err);
+        }
+      };
+      fetchSubmission();
+    }
+  }, [editId, reset]);
 
   useEffect(() => {
     const fetchPatients = async () => {
@@ -798,14 +821,14 @@ export const GAFCCarePlan: React.FC = () => {
           <h3 className="text-lg font-bold text-zinc-900 border-b pb-2 uppercase tracking-wider">Care Plan Agreement</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
             <div className="space-y-4">
-              <SignaturePad label="Member Signature" onSave={(sig) => setValue('signatures.memberSignature', sig, { shouldValidate: true })} />
+              <SignaturePad label="Member Signature" onSave={(sig) => setValue('signatures.memberSignature', sig, { shouldValidate: true })} initialValue={watch('signatures.memberSignature')} />
               <div className="space-y-1">
                 <label className="text-xs font-bold text-zinc-500 uppercase">Date</label>
                 <input type="date" {...register('signatures.memberDate')} className="w-full px-4 py-2 rounded-xl border border-zinc-200" />
               </div>
             </div>
             <div className="space-y-4">
-              <SignaturePad label="Care Manager Signature" onSave={(sig) => setValue('signatures.careManagerSignature', sig, { shouldValidate: true })} />
+              <SignaturePad label="Care Manager Signature" onSave={(sig) => setValue('signatures.careManagerSignature', sig, { shouldValidate: true })} initialValue={watch('signatures.careManagerSignature')} />
               <div className="space-y-1">
                 <label className="text-xs font-bold text-zinc-500 uppercase">Date</label>
                 <input type="date" {...register('signatures.careManagerDate')} className="w-full px-4 py-2 rounded-xl border border-zinc-200" />
@@ -836,4 +859,3 @@ export const GAFCCarePlan: React.FC = () => {
     </div>
   );
 };
-
