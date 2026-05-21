@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { 
   Users, 
@@ -12,7 +11,10 @@ import {
   ArrowRight,
   RefreshCw,
   Settings,
-  Loader2
+  Loader2,
+  ChevronLeft,
+  ChevronRight,
+  Eye
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { Button } from '../components/Button';
@@ -28,6 +30,37 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import { Link } from 'react-router-dom';
+import { format } from 'date-fns';
+
+const FORMS_PER_PAGE = 10;
+
+const FORM_ROUTES: Record<string, string> = {
+  'GAFC Progress Note': '/progress-note',
+  'GAFC Care Plan': '/care-plan',
+  'Physician Summary (PSF-1)': '/physician-summary',
+  'Request for Services (RFS-1)': '/request-for-services',
+  'Patient Resource Data': '/patient-resource-data',
+  'Physician Orders': '/physician-orders',
+  'MDS Assessment': '/mds-assessment',
+  'Nursing Assessment': '/nursing-assessment',
+  'Medication Administration Record (MAR)': '/mar',
+  'Treatment Administration Record (TAR)': '/tar',
+  'Clinical Note': '/clinical-note-form',
+  'Semi-Annual Health Status Report': '/semi-annual-health-status',
+  'GAFC Aide Care Plan': '/gafc-aide-care-plan',
+  'Medication List': '/medication-list',
+  'Home Safety Inspection': '/home-safety-inspection',
+};
+
+const statusStyle = (status: string) => {
+  switch (status?.toLowerCase()) {
+    case 'submitted': return 'bg-emerald-100 text-emerald-700';
+    case 'draft':     return 'bg-amber-100 text-amber-700';
+    case 'reviewed':  return 'bg-blue-100 text-blue-700';
+    case 'approved':  return 'bg-partners-blue-dark/10 text-partners-blue-dark';
+    default:          return 'bg-zinc-100 text-zinc-600';
+  }
+};
 
 const StatCard = ({ title, value, icon: Icon, trend, color, loading }: any) => {
   const getIconColor = (bgClass: string) => {
@@ -71,12 +104,47 @@ export const Dashboard: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [timeRange, setTimeRange] = useState('7');
 
+  // Submitted forms table state
+  const [allForms, setAllForms] = useState<any[]>([]);
+  const [formsLoading, setFormsLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalForms, setTotalForms] = useState(0);
+
   useEffect(() => {
     checkConnection();
     fetchDashboardData();
-
-
   }, [timeRange]);
+
+  useEffect(() => {
+    fetchSubmittedForms();
+  }, [currentPage]);
+
+  const fetchSubmittedForms = async () => {
+    setFormsLoading(true);
+    try {
+      const from = (currentPage - 1) * FORMS_PER_PAGE;
+      const to = from + FORMS_PER_PAGE - 1;
+
+      const { data, error, count } = await supabase
+        .from('form_responses')
+        .select(`
+          id, created_at, status, form_id, patient_id,
+          forms(name),
+          patients(first_name, last_name)
+        `, { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+      if (!error) {
+        setAllForms(data || []);
+        setTotalForms(count || 0);
+      }
+    } catch (err) {
+      console.error('Error fetching submitted forms:', err);
+    } finally {
+      setFormsLoading(false);
+    }
+  };
 
   const checkConnection = async () => {
     await testSupabaseConnection();
@@ -334,7 +402,184 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* ── Submitted Forms Table ─────────────────────────────────────────── */}
+      <div className="bg-white rounded-3xl border border-zinc-200 shadow-sm overflow-hidden">
+        {/* Header */}
+        <div className="px-6 py-5 border-b border-zinc-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-bold text-zinc-900 flex items-center gap-2">
+              <FileText size={18} className="text-partners-blue-dark" />
+              Submitted Forms
+            </h3>
+            <p className="text-xs text-zinc-400 mt-0.5">
+              All clinical forms — newest first
+            </p>
+          </div>
+          {!formsLoading && totalForms > 0 && (
+            <span className="text-xs font-bold text-zinc-500 bg-zinc-100 px-3 py-1.5 rounded-full self-start sm:self-auto">
+              {totalForms} total
+            </span>
+          )}
+        </div>
+
+        {/* Table */}
+        <div className="overflow-x-auto">
+          {formsLoading ? (
+            <div className="p-6 space-y-3">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="animate-pulse flex items-center gap-4 py-3 border-b border-zinc-50">
+                  <div className="h-3 bg-zinc-100 rounded w-1/4" />
+                  <div className="h-3 bg-zinc-100 rounded w-1/5" />
+                  <div className="h-3 bg-zinc-100 rounded w-1/6" />
+                  <div className="h-5 bg-zinc-100 rounded-full w-20" />
+                  <div className="h-3 bg-zinc-100 rounded w-12 ml-auto" />
+                </div>
+              ))}
+            </div>
+          ) : allForms.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-center">
+              <div className="w-14 h-14 rounded-2xl bg-zinc-100 flex items-center justify-center mb-4">
+                <FileText size={26} className="text-zinc-400" />
+              </div>
+              <p className="text-sm font-bold text-zinc-500">No forms submitted yet</p>
+              <p className="text-xs text-zinc-400 mt-1">Submitted clinical forms will appear here.</p>
+            </div>
+          ) : (
+            <table className="w-full text-left">
+              <thead>
+                <tr className="bg-zinc-50">
+                  <th className="px-6 py-3.5 text-[11px] font-bold text-zinc-500 uppercase tracking-wider">#</th>
+                  <th className="px-6 py-3.5 text-[11px] font-bold text-zinc-500 uppercase tracking-wider">Form Name</th>
+                  <th className="px-6 py-3.5 text-[11px] font-bold text-zinc-500 uppercase tracking-wider">Patient</th>
+                  <th className="px-6 py-3.5 text-[11px] font-bold text-zinc-500 uppercase tracking-wider">Submitted On</th>
+                  <th className="px-6 py-3.5 text-[11px] font-bold text-zinc-500 uppercase tracking-wider">Status</th>
+                  <th className="px-6 py-3.5 text-[11px] font-bold text-zinc-500 uppercase tracking-wider text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-50">
+                {allForms.map((fr, idx) => {
+                  const formName = fr.forms?.name ?? 'Unknown Form';
+                  const patientName = fr.patients
+                    ? `${fr.patients.last_name}, ${fr.patients.first_name}`
+                    : '—';
+                  const routePath = FORM_ROUTES[formName];
+                  const viewUrl = routePath
+                    ? `${routePath}?patientId=${fr.patient_id}&id=${fr.id}`
+                    : null;
+                  const rowNum = (currentPage - 1) * FORMS_PER_PAGE + idx + 1;
+
+                  return (
+                    <tr key={fr.id} className="hover:bg-zinc-50/70 transition-colors group">
+                      <td className="px-6 py-4 text-xs font-bold text-zinc-400">{rowNum}</td>
+
+                      {/* Form name */}
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-xl bg-partners-blue-dark/8 flex items-center justify-center flex-shrink-0">
+                            <FileText size={14} className="text-partners-blue-dark" />
+                          </div>
+                          <span className="text-sm font-bold text-zinc-900">{formName}</span>
+                        </div>
+                      </td>
+
+                      {/* Patient */}
+                      <td className="px-6 py-4 text-sm text-zinc-600 font-medium">{patientName}</td>
+
+                      {/* Date */}
+                      <td className="px-6 py-4 text-sm text-zinc-500">
+                        {fr.created_at
+                          ? format(new Date(fr.created_at), 'MMM d, yyyy · h:mm a')
+                          : '—'}
+                      </td>
+
+                      {/* Status */}
+                      <td className="px-6 py-4">
+                        <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${statusStyle(fr.status)}`}>
+                          {fr.status ?? 'unknown'}
+                        </span>
+                      </td>
+
+                      {/* Action */}
+                      <td className="px-6 py-4 text-right">
+                        {viewUrl ? (
+                          <Link
+                            to={viewUrl}
+                            className="inline-flex items-center gap-1.5 text-xs font-bold text-partners-blue-dark bg-partners-blue-dark/10 hover:bg-partners-blue-dark/20 px-3 py-1.5 rounded-lg transition-colors opacity-0 group-hover:opacity-100"
+                          >
+                            <Eye size={13} /> View
+                          </Link>
+                        ) : (
+                          <span className="text-xs text-zinc-300">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Pagination */}
+        {totalForms > FORMS_PER_PAGE && (
+          <div className="px-6 py-4 border-t border-zinc-100 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <p className="text-xs text-zinc-500">
+              Showing{' '}
+              <span className="font-bold text-zinc-700">
+                {(currentPage - 1) * FORMS_PER_PAGE + 1}–{Math.min(currentPage * FORMS_PER_PAGE, totalForms)}
+              </span>{' '}
+              of <span className="font-bold text-zinc-700">{totalForms}</span> forms
+            </p>
+            <div className="flex items-center gap-1">
+              {/* Prev */}
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="w-8 h-8 rounded-xl flex items-center justify-center text-zinc-500 hover:bg-zinc-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                <ChevronLeft size={15} />
+              </button>
+
+              {/* Page numbers */}
+              {Array.from({ length: Math.ceil(totalForms / FORMS_PER_PAGE) }, (_, i) => i + 1)
+                .filter(p => p === 1 || p === Math.ceil(totalForms / FORMS_PER_PAGE) || Math.abs(p - currentPage) <= 1)
+                .reduce<(number | '...')[]>((acc, p, i, arr) => {
+                  if (i > 0 && typeof arr[i - 1] === 'number' && (p as number) - (arr[i - 1] as number) > 1) acc.push('...');
+                  acc.push(p);
+                  return acc;
+                }, [])
+                .map((p, i) =>
+                  p === '...' ? (
+                    <span key={`ellipsis-${i}`} className="w-8 h-8 flex items-center justify-center text-xs text-zinc-400">…</span>
+                  ) : (
+                    <button
+                      key={p}
+                      onClick={() => setCurrentPage(p as number)}
+                      className={`w-8 h-8 rounded-xl text-xs font-bold transition-colors ${
+                        currentPage === p
+                          ? 'bg-partners-blue-dark text-white'
+                          : 'text-zinc-600 hover:bg-zinc-100'
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  )
+                )}
+
+              {/* Next */}
+              <button
+                onClick={() => setCurrentPage(p => Math.min(Math.ceil(totalForms / FORMS_PER_PAGE), p + 1))}
+                disabled={currentPage === Math.ceil(totalForms / FORMS_PER_PAGE)}
+                className="w-8 h-8 rounded-xl flex items-center justify-center text-zinc-500 hover:bg-zinc-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              >
+                <ChevronRight size={15} />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
     </div>
   );
 };
-
