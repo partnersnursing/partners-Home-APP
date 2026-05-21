@@ -48,6 +48,7 @@ export const PhysicianOrders: React.FC = () => {
   const { profile } = useAuth();
   const [searchParams] = useSearchParams();
   const patientId = searchParams.get('patientId') || DUMMY_PATIENT_ID;
+  const editId = searchParams.get('id');
   const [notification, setNotification] = useState<{ type: NotificationType, message: string } | null>(null);
 
   const { register, handleSubmit, setValue, watch, control, reset, getValues, formState: { errors, isSubmitting } } = useForm<OrdersFormValues>({
@@ -62,6 +63,25 @@ export const PhysicianOrders: React.FC = () => {
     control,
     name: 'medications'
   });
+
+  // Load existing submission when opened via View Form
+  useEffect(() => {
+    if (editId) {
+      const fetchSubmission = async () => {
+        try {
+          const { data, error } = await supabase
+            .from('form_responses')
+            .select('*')
+            .eq('id', editId)
+            .single();
+          if (data && !error) reset(data.data);
+        } catch (err) {
+          console.error('PhysicianOrders: Error fetching submission:', err);
+        }
+      };
+      fetchSubmission();
+    }
+  }, [editId, reset]);
 
   const [formId, setFormId] = useState<string | null>(null);
   const [isFetchingForm, setIsFetchingForm] = useState(true);
@@ -374,7 +394,8 @@ export const PhysicianOrders: React.FC = () => {
             <div className="space-y-4">
               <SignaturePad 
                 label="Physician Signature" 
-                onSave={(sig) => setValue('physician.signature', sig, { shouldValidate: true })} 
+                onSave={(sig) => setValue('physician.signature', sig, { shouldValidate: true })}
+                initialValue={watch('physician.signature')}
               />
               {errors.physician?.signature && <p className="text-xs text-red-500">{errors.physician.signature.message}</p>}
             </div>
