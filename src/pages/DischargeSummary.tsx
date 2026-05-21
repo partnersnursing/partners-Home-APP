@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useSearchParams, Link } from 'react-router-dom';
@@ -31,17 +31,37 @@ export const DischargeSummary: React.FC = () => {
   const [searchParams] = useSearchParams();
   const patientIdFromUrl = searchParams.get('patientId');
   const patientId = patientIdFromUrl || DUMMY_PATIENT_ID;
+  const editId = searchParams.get('id');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [notification, setNotification] = useState<{ type: NotificationType, message: string } | null>(null);
 
-  const { register, handleSubmit, formState: { errors }, setValue, getValues } = useForm<DischargeValues>({
+  const { register, handleSubmit, formState: { errors }, setValue, watch, reset, getValues } = useForm<DischargeValues>({
     resolver: zodResolver(dischargeSchema),
     defaultValues: {
       date: new Date().toISOString().split('T')[0]
     }
   });
+
+  // Load existing submission when opened via View Form
+  useEffect(() => {
+    if (editId) {
+      const fetchSubmission = async () => {
+        try {
+          const { data, error } = await supabase
+            .from('form_responses')
+            .select('*')
+            .eq('id', editId)
+            .single();
+          if (data && !error) reset(data.data);
+        } catch (err) {
+          console.error('DischargeSummary: Error fetching submission:', err);
+        }
+      };
+      fetchSubmission();
+    }
+  }, [editId, reset]);
 
   const onSubmit = async (data: DischargeValues) => {
     if (!profile) return;
@@ -172,7 +192,7 @@ export const DischargeSummary: React.FC = () => {
         </div>
         <div className="space-y-4">
           <label className="text-sm font-medium text-zinc-700">Signature</label>
-          <SignaturePad onSave={(sig) => setValue('signature', sig)} />
+          <SignaturePad onSave={(sig) => setValue('signature', sig)} initialValue={watch('signature')} />
           {errors.signature && <p className="text-xs text-red-500">{errors.signature.message}</p>}
         </div>
       </form>
