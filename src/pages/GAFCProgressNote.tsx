@@ -719,7 +719,8 @@ export const GAFCProgressNote: React.FC = () => {
             <div className="space-y-4">
               <SignaturePad 
                 label="Staff Signature" 
-                onSave={(sig) => setValue('staffSignature', sig, { shouldValidate: true })} 
+                onSave={(sig) => setValue('staffSignature', sig, { shouldValidate: true })}
+                initialValue={watch('staffSignature')}
               />
               {errors.staffSignature && <p className="text-xs text-red-500">{errors.staffSignature.message}</p>}
             </div>
@@ -740,4 +741,3 @@ export const GAFCProgressNote: React.FC = () => {
     </div>
   );
 };
-
