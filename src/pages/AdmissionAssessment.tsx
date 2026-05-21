@@ -190,7 +190,7 @@ export const AdmissionAssessment: React.FC = () => {
         </div>
         <div className="space-y-4">
           <label className="text-sm font-medium text-zinc-700">Signature</label>
-          <SignaturePad onSave={(sig) => setValue('signature', sig)} />
+          <SignaturePad onSave={(sig) => setValue('signature', sig)} initialValue={watch('signature')} />
         </div>
       </form>
       {notification && (
