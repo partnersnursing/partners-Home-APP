@@ -430,6 +430,7 @@ export const MDSAssessment: React.FC = () => {
   const { profile } = useAuth();
   const [searchParams] = useSearchParams();
   const [selectedPatientId, setSelectedPatientId] = useState<string>(searchParams.get('patientId') || '');
+  const editId = searchParams.get('id');
   const [patients, setPatients] = useState<any[]>([]);
   const [isLoadingPatients, setIsLoadingPatients] = useState(true);
   const [notification, setNotification] = useState<{ type: 'success' | 'error', message: string } | null>(null);
@@ -702,6 +703,27 @@ export const MDSAssessment: React.FC = () => {
     }
   }, [selectedPatientId, setValue]);
 
+  // Load existing submission when opened via View/Edit from Dashboard
+  useEffect(() => {
+    if (editId) {
+      (async () => {
+        try {
+          const { data, error } = await supabase
+            .from('form_responses')
+            .select('*')
+            .eq('id', editId)
+            .maybeSingle();
+          if (data && !error) {
+            if (data.patient_id) setSelectedPatientId(data.patient_id);
+            reset(data.data);
+          }
+        } catch (err) {
+          console.error('MDS Assessment: Error fetching submission for edit:', err);
+        }
+      })();
+    }
+  }, [editId, reset]);
+
   const [isSavingDraft, setIsSavingDraft] = useState(false);
 
   const submitForm = async (data: MDSFormValues, status: 'draft' | 'submitted') => {
@@ -747,27 +769,38 @@ export const MDSAssessment: React.FC = () => {
         throw new Error(`The patient (ID: ${selectedPatientId}) does not exist in the database. Please select a valid patient from the dropdown.`);
       }
 
-      // 2. Insert into form_responses
-      const { error: responseError } = await supabase
-        .from('form_responses')
-        .insert([{
-          form_id: currentFormId,
-          patient_id: selectedPatientId,
-          staff_id: profile.id,
-          data: data,
-          status: status
-        }]);
+      // 2. Insert or Update form_responses
+      let responseError: any = null;
+
+      if (editId) {
+        const { error: upErr } = await supabase
+          .from('form_responses')
+          .update({ data: data, status: status, updated_at: new Date().toISOString() })
+          .eq('id', editId);
+        responseError = upErr;
+      } else {
+        const { error: inErr } = await supabase
+          .from('form_responses')
+          .insert([{
+            form_id: currentFormId,
+            patient_id: selectedPatientId,
+            staff_id: profile.id,
+            data: data,
+            status: status
+          }]);
+        responseError = inErr;
+      }
       
       if (responseError) {
-        console.error('MDS Form: Response insertion error:', responseError);
+        console.error('MDS Form: Response error:', responseError);
         throw responseError;
       }
       
       setNotification({ 
         type: 'success', 
-        message: status === 'draft' ? 'Draft saved successfully!' : 'MDS Assessment submitted successfully!' 
+        message: status === 'draft' ? 'Draft saved successfully!' : editId ? 'MDS Assessment updated successfully!' : 'MDS Assessment submitted successfully!'
       });
-      if (status === 'submitted') reset();
+      if (status === 'submitted' && !editId) reset();
     } catch (error: any) {
       console.error('MDS Form: Caught error during submission:', error);
       setNotification({ type: 'error', message: `Error: ${error.message}` });
@@ -2177,16 +2210,6 @@ export const MDSAssessment: React.FC = () => {
             </div>
           </div>
         </section>
-        <div className="flex flex-row items-center justify-end gap-3 no-print pt-4 border-t border-zinc-100">
-          <Button
-            type="button"
-            onClick={handleSubmit(onSubmit, onValidationError)}
-            disabled={isSubmitting}
-          >
-            <Send className="w-4 h-4 mr-2" />
-            {isSubmitting ? 'Submitting...' : 'Submit Form'}
-          </Button>
-        </div>
       </form>
 
       {/* Notification Toast */}

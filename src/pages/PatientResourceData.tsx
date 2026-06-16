@@ -135,7 +135,7 @@ export const PatientResourceData: React.FC = () => {
           .from('form_responses')
           .select('*')
           .eq('id', editId)
-          .single();
+          .maybeSingle();
         if (saved?.data) { reset(saved.data); return; }
       }
 
@@ -198,19 +198,30 @@ export const PatientResourceData: React.FC = () => {
       
       console.log(`Patient Resource Data: Using Form ID: ${currentFormId}, Patient ID: ${patientId}`);
 
-      // 2. Insert into form_responses
-      const { error: responseError } = await supabase
-        .from('form_responses')
-        .insert([{
-          form_id: currentFormId,
-          patient_id: patientId,
-          staff_id: profile.id,
-          data: data,
-          status: status
-        }]);
+      // 2. Insert or Update form_responses
+      let responseError: any = null;
+
+      if (editId) {
+        const { error: upErr } = await supabase
+          .from('form_responses')
+          .update({ data: data, status: status, updated_at: new Date().toISOString() })
+          .eq('id', editId);
+        responseError = upErr;
+      } else {
+        const { error: inErr } = await supabase
+          .from('form_responses')
+          .insert([{
+            form_id: currentFormId,
+            patient_id: patientId,
+            staff_id: profile.id,
+            data: data,
+            status: status
+          }]);
+        responseError = inErr;
+      }
       
       if (responseError) {
-        console.error('Patient Resource Data: Response insertion error:', responseError);
+        console.error('Patient Resource Data: Response error:', responseError);
         throw responseError;
       }
       
@@ -468,17 +479,6 @@ export const PatientResourceData: React.FC = () => {
             </div>
           </div>
         </section>
-        <div className="flex flex-row items-center justify-end gap-3 no-print pt-4 border-t border-zinc-100">
-          <Button
-            type="button"
-            onClick={handleSubmit(onSubmit)}
-            disabled={isSubmitting || isSavingDraft || isGeneratingPDF}
-            className="h-11 px-6 md:px-8 rounded-xl shadow-md flex-1 md:flex-none"
-          >
-            <Send className="w-4 h-4 mr-2" />
-            {isSubmitting ? 'Submitting...' : 'Submit Form'}
-          </Button>
-        </div>
       </form>
       {notification && (
         <Notification 

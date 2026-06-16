@@ -53,7 +53,7 @@ export const DischargeSummary: React.FC = () => {
             .from('form_responses')
             .select('*')
             .eq('id', editId)
-            .single();
+            .maybeSingle();
           if (data && !error) reset(data.data);
         } catch (err) {
           console.error('DischargeSummary: Error fetching submission:', err);
@@ -67,22 +67,31 @@ export const DischargeSummary: React.FC = () => {
     if (!profile) return;
     setIsSubmitting(true);
     try {
-      const formId = await getFormIdByName('Discharge Summary');
-      
-      // Use withRetry and withTimeout for more robust submission
-      const { error } = await withRetry(() => withTimeout(
-        supabase.from('form_responses').insert([{
-          form_id: formId,
-          patient_id: patientId,
-          staff_id: profile.id,
-          data: data,
-          status: 'submitted'
-        }]),
-        30000
-      ));
+      let error: any = null;
+
+      if (editId) {
+        const { error: upErr } = await supabase
+          .from('form_responses')
+          .update({ data: data, status: 'submitted', updated_at: new Date().toISOString() })
+          .eq('id', editId);
+        error = upErr;
+      } else {
+        const formId = await getFormIdByName('Discharge Summary');
+        const { error: inErr } = await withRetry(() => withTimeout(
+          supabase.from('form_responses').insert([{
+            form_id: formId,
+            patient_id: patientId,
+            staff_id: profile.id,
+            data: data,
+            status: 'submitted'
+          }]),
+          30000
+        ));
+        error = inErr;
+      }
 
       if (error) throw error;
-      setNotification({ type: 'success', message: 'Discharge Summary submitted successfully!' });
+      setNotification({ type: 'success', message: editId ? 'Discharge Summary updated successfully!' : 'Discharge Summary submitted successfully!' });
     } catch (error: any) {
       console.error('Discharge Summary: Submission error:', error);
       setNotification({ type: 'error', message: `Error: ${error.message || 'Failed to submit form'}` });
@@ -194,17 +203,6 @@ export const DischargeSummary: React.FC = () => {
           <label className="text-sm font-medium text-zinc-700">Signature</label>
           <SignaturePad onSave={(sig) => setValue('signature', sig)} initialValue={watch('signature')} />
           {errors.signature && <p className="text-xs text-red-500">{errors.signature.message}</p>}
-        </div>
-        <div className="flex flex-row items-center justify-end gap-3 no-print pt-4 border-t border-zinc-100">
-          <Button
-            type="button"
-            onClick={handleSubmit(onSubmit)}
-            disabled={isSubmitting}
-            className="h-10 px-4 rounded-xl shadow-md bg-partners-blue-dark hover:bg-partners-blue transition-all active:scale-95"
-          >
-            <Send className="w-4 h-4 mr-2" />
-            {isSubmitting ? 'Submitting...' : 'Submit Form'}
-          </Button>
         </div>
       </form>
       {notification && (

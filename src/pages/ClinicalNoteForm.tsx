@@ -172,8 +172,8 @@ export const ClinicalNoteForm: React.FC = () => {
             updated_at: new Date().toISOString()
           })
           .eq('id', editId)
-          .select()
-          .single();
+          .select('id')
+          .maybeSingle();
         
         if (responseError) throw responseError;
         responseData = updateResult;
@@ -188,18 +188,16 @@ export const ClinicalNoteForm: React.FC = () => {
             data: data,
             status: status
           }])
-          .select()
-          .single();
+          .select('id')
+          .maybeSingle();
         
         if (responseError) throw responseError;
         responseData = insertResult;
       }
 
-      if (!responseData) {
-        throw new Error('No data returned from form submission. This might be due to database permissions (RLS).');
-      }
+      const responseId = responseData?.id ?? editId ?? null;
 
-      console.log('Clinical Note: Response inserted successfully, ID:', responseData.id);
+      console.log('Clinical Note: Response submitted, ID:', responseId);
 
       // 3. Insert signature if present
       if (data.signature) {
@@ -207,7 +205,7 @@ export const ClinicalNoteForm: React.FC = () => {
         const { error: sigError } = await supabase
           .from('signatures')
           .insert([{
-            parent_id: responseData.id,
+            parent_id: responseId,
             parent_type: 'form_response',
             signer_id: profile.id,
             signature_data: data.signature
@@ -394,17 +392,6 @@ export const ClinicalNoteForm: React.FC = () => {
             {errors.signature && <p className="text-xs text-red-500 mt-1">{errors.signature.message}</p>}
           </div>
         </section>
-        <div className="flex flex-row items-center justify-end gap-3 no-print pt-4 border-t border-zinc-100">
-          <Button
-            type="button"
-            onClick={handleSubmit(onSubmit)}
-            disabled={isSubmitting}
-            className="h-10 px-4 rounded-xl shadow-md bg-partners-blue-dark hover:bg-partners-blue transition-all active:scale-95"
-          >
-            <Send className="w-4 h-4 mr-2" />
-            {isSubmitting ? 'Submitting...' : 'Submit Note'}
-          </Button>
-        </div>
       </form>
       {notification && (
         <Notification 

@@ -275,7 +275,7 @@ export const GAFCProgressNote: React.FC = () => {
       // 2. Insert or Update form_responses
       let responseData;
       if (editId) {
-        const { data: updateResult, error } = await supabase
+        const { error } = await supabase
           .from('form_responses')
           .update({
             data: data,
@@ -283,12 +283,10 @@ export const GAFCProgressNote: React.FC = () => {
             visit_id: visitIdFromUrl || undefined,
             updated_at: new Date().toISOString()
           })
-          .eq('id', editId)
-          .select()
-          .single();
+          .eq('id', editId);
         
         if (error) throw error;
-        responseData = updateResult;
+        responseData = { id: editId };
       } else {
         const { data: insertResult, error } = await supabase
           .from('form_responses')
@@ -300,26 +298,25 @@ export const GAFCProgressNote: React.FC = () => {
             data: data,
             status: status
           }])
-          .select()
-          .single();
+          .select('id')
+          .limit(1);
         
         if (error) throw error;
-        responseData = insertResult;
+        responseData = Array.isArray(insertResult) ? insertResult[0] : insertResult;
       }
       
-      if (!responseData) {
-        throw new Error('No data returned from form submission. This might be due to database permissions (RLS).');
-      }
+      // responseData may be null if RLS blocks SELECT after write — the write still succeeded
+      const responseId = responseData?.id ?? editId ?? null;
 
-      console.log('GAFC Note: Response inserted successfully, ID:', responseData.id);
+      console.log('GAFC Note: Response submitted successfully, ID:', responseId);
 
       // 3. Insert signature if present
-      if (data.staffSignature) {
+      if (data.staffSignature && responseId) {
         console.log('GAFC Note: Inserting signature...');
         const { error: sigError } = await supabase
           .from('signatures')
           .insert([{
-            parent_id: responseData.id,
+            parent_id: responseId,
             parent_type: 'form_response',
             signer_id: profile.id,
             signature_data: data.staffSignature
@@ -730,17 +727,6 @@ export const GAFCProgressNote: React.FC = () => {
             </div>
           </div>
         </section>
-        <div className="flex flex-row items-center justify-end gap-3 no-print pt-4 border-t border-zinc-100">
-          <Button
-            type="button"
-            onClick={handleSubmit(onSubmit)}
-            disabled={isSubmitting}
-            className="h-10 px-4 rounded-xl shadow-md bg-partners-blue-dark hover:bg-partners-blue transition-all active:scale-95"
-          >
-            <Send className="w-4 h-4 mr-2" />
-            {isSubmitting ? 'Submitting...' : 'Submit Note'}
-          </Button>
-        </div>
       </form>
       {notification && (
         <Notification 

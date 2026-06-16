@@ -151,7 +151,7 @@ export const HomeSafetyInspection: React.FC = () => {
             .from('form_responses')
             .select('*')
             .eq('id', editId)
-            .single();
+            .maybeSingle();
           if (data && !error) reset(data.data);
         } catch (err) {
           console.error('HomeSafetyInspection: Error fetching submission:', err);
@@ -219,25 +219,40 @@ export const HomeSafetyInspection: React.FC = () => {
         setFormId(currentFormId);
       }
 
-      const { data: responseData, error: responseError } = await supabase
-        .from('form_responses')
-        .insert([{
-          form_id: currentFormId,
-          patient_id: selectedPatientId || '00000000-0000-0000-0000-000000000000',
-          staff_id: profile.id,
-          data: data,
-          status: 'submitted',
-        }])
-        .select()
-        .single();
+      let responseData: any = null;
 
-      if (responseError) throw responseError;
+      if (editId) {
+        const { data: upData, error: upErr } = await supabase
+          .from('form_responses')
+          .update({ data: data, status: 'submitted', updated_at: new Date().toISOString() })
+          .eq('id', editId)
+          .select('id')
+          .maybeSingle();
+        if (upErr) throw upErr;
+        responseData = upData;
+      } else {
+        const { data: inData, error: inErr } = await supabase
+          .from('form_responses')
+          .insert([{
+            form_id: currentFormId,
+            patient_id: selectedPatientId || '00000000-0000-0000-0000-000000000000',
+            staff_id: profile.id,
+            data: data,
+            status: 'submitted',
+          }])
+          .select('id')
+          .maybeSingle();
+        if (inErr) throw inErr;
+        responseData = inData;
+      }
 
-      if (data.signature) {
+      const responseId = responseData?.id ?? editId ?? null;
+
+      if (data.signature && responseId) {
         await supabase
           .from('signatures')
           .insert([{
-            parent_id: responseData.id,
+            parent_id: responseId,
             parent_type: 'form_response',
             signer_id: profile.id,
             signature_data: data.signature,
@@ -515,12 +530,6 @@ export const HomeSafetyInspection: React.FC = () => {
             )}
           </div>
         </section>
-        <div className="flex flex-row items-center justify-end gap-3 no-print pt-4 border-t border-zinc-100">
-          <Button onClick={handleSubmit(onSubmit)} disabled={isSubmitting} type="button">
-            <Send className="w-4 h-4 mr-2" />
-            {isSubmitting ? 'Submitting...' : 'Submit Inspection'}
-          </Button>
-        </div>
       </form>
     </div>
   );

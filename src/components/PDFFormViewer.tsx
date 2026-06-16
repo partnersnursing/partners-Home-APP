@@ -388,7 +388,22 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
               } catch {}
 
               const multiWidget = widgets.length > 1;
-              for (const widget of widgets) {
+              // Pre-sort widgets left-to-right, top-to-bottom for consistent indexing
+              const sortedWidgets = [...widgets].sort((a, b) => {
+                const ra = a.getRectangle(), rb = b.getRectangle();
+                if (Math.abs(ra.y - rb.y) > 5) return rb.y - ra.y; // higher y = earlier (PDF coords)
+                return ra.x - rb.x;
+              });
+              // Get full field text once (for multi-widget character splitting)
+              let fullText = '';
+              try {
+                if (multiWidget && field instanceof PDFTextField) {
+                  fullText = (field as PDFTextField).getText?.() ?? '';
+                }
+              } catch {}
+
+              for (let wi = 0; wi < widgets.length; wi++) {
+                const widget = widgets[wi];
                 try {
                   const rect = widget.getRectangle();
                   const x2   = rect.x + rect.width;
@@ -426,7 +441,33 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
                     options, isComb, combLen, buttonValue,
                   });
 
-                  if (!(valueKey in initVals)) initVals[valueKey] = effectiveType === 'checkbox' ? 'false' : '';
+                  if (!(valueKey in initVals)) {
+                    // Read the existing value from the PDF field (crucial for stored submissions)
+                    let existingVal = '';
+                    try {
+                      if (effectiveType === 'checkbox') {
+                        existingVal = (field as PDFCheckBox).isChecked?.() ? 'true' : 'false';
+                      } else if (effectiveType === 'radio') {
+                        existingVal = (field as PDFRadioGroup).getSelected?.() ?? '';
+                      } else if (effectiveType === 'dropdown') {
+                        const sel = (field as PDFDropdown).getSelected?.();
+                        existingVal = Array.isArray(sel) ? (sel[0] ?? '') : (sel ?? '');
+                      } else if (effectiveType === 'text' || effectiveType === 'multiline') {
+                        if (multiWidget && fullText) {
+                          // For multi-widget fields, find this widget's position in sorted order
+                          // and extract the corresponding character
+                          const sortedIdx = sortedWidgets.findIndex(sw => {
+                            const sr = sw.getRectangle();
+                            return Math.abs(sr.x - rect.x) < 2 && Math.abs(sr.y - rect.y) < 2;
+                          });
+                          existingVal = sortedIdx >= 0 ? (fullText[sortedIdx] ?? '') : '';
+                        } else {
+                          existingVal = (field as PDFTextField).getText?.() ?? '';
+                        }
+                      }
+                    } catch {}
+                    initVals[valueKey] = existingVal;
+                  }
                 } catch (e) { console.warn('[PDFFormViewer] widget error:', e); }
               }
             } catch (e) { console.warn('[PDFFormViewer] field error:', e); }
@@ -477,6 +518,12 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
     const vals     = formValuesRef.current;
     const snapshot = fieldsRef.current;
 
+    // When editing a stored PDF, `sourceBytes` is set — we only want to
+    // overwrite fields that the user actually has in formValues. Fields whose
+    // valueKey is absent from vals should keep the existing value already
+    // baked into the stored PDF (set them to undefined = don't touch).
+    const isEditMode = !!sourceBytes;
+
     for (const field of form.getFields()) {
       try {
         const name    = field.getName();
@@ -485,23 +532,29 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
 
         if (field instanceof PDFTextField) {
           if (entries.length === 1) {
-            (field as any).setText(vals[entries[0].valueKey] ?? '');
+            const v = vals[entries[0].valueKey];
+            // In edit mode: only overwrite if we have a value tracked; otherwise keep existing
+            if (!isEditMode || v !== undefined) (field as any).setText(v ?? '');
           } else {
             const combined = entries
               .sort((a, b) => a.px1 - b.px1 || a.py1 - b.py1)
               .map(e => vals[e.valueKey] ?? '')
               .join('');
-            (field as any).setText(combined);
+            // Only overwrite if at least one part is tracked
+            const anyTracked = entries.some(e => vals[e.valueKey] !== undefined);
+            if (!isEditMode || anyTracked) (field as any).setText(combined);
           }
         } else if (field instanceof PDFCheckBox) {
-          const v = vals[entries[0].valueKey] ?? 'false';
-          (field as any)[v === 'true' ? 'check' : 'uncheck']();
+          const v = vals[entries[0].valueKey];
+          if (!isEditMode || v !== undefined) {
+            (field as any)[(v ?? 'false') === 'true' ? 'check' : 'uncheck']();
+          }
         } else if (field instanceof PDFDropdown) {
-          const v = vals[entries[0].valueKey] ?? '';
-          if (v) (field as any).select(v);
+          const v = vals[entries[0].valueKey];
+          if ((!isEditMode || v !== undefined) && v) (field as any).select(v);
         } else if (field instanceof PDFRadioGroup) {
-          const v = vals[entries[0].valueKey] ?? '';
-          if (v) (field as any).select(v);
+          const v = vals[entries[0].valueKey];
+          if ((!isEditMode || v !== undefined) && v) (field as any).select(v);
         }
       } catch (e) {
         console.warn(`[PDFFormViewer] skipping field "${field.getName?.()}":`, e);
@@ -544,7 +597,17 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
         blank[k] = prev[k] === 'true' || prev[k] === 'false' ? 'false' : '';
       return blank;
     });
-  }, []);
+    setNotes('');
+    // Force pdf.js to re-render a completely fresh blank PDF by briefly
+    // unmounting and remounting the viewer with the blank template path.
+    setActivePdfPath(null);
+    setTimeout(() => setActivePdfPath(pdfPath), 50);
+    setViewingStoredPdf(false);
+    setIsEditingStored(false);
+    storedStoragePathRef.current = null;
+    storedResponseIdRef.current  = null;
+    storedPdfBytesRef.current    = null;
+  }, [pdfPath]);
 
   // ── Download → print dialog ──────────────────────────────────────────────────
   const handleDownload = useCallback(async () => {

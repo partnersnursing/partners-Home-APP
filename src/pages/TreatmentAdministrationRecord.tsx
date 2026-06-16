@@ -149,29 +149,37 @@ export const TreatmentAdministrationRecord: React.FC = () => {
         throw new Error(`The patient (ID: ${patientId}) does not exist in the database. Please go to the Dashboard and click "Setup Now" to create the test patient.`);
       }
 
-      // 2. Insert into form_responses
-      const { data: responseData, error: responseError } = await supabase
-        .from('form_responses')
-        .insert([{
-          form_id: currentFormId,
-          patient_id: patientId,
-          staff_id: profile.id,
-          data: data,
-          status: status
-        }])
-        .select()
-        .single();
-      
-      if (responseError) {
-        console.error(`${FORM_NAME}: Response insertion error:`, responseError);
-        throw responseError;
+      // 2. Insert or Update form_responses
+      let responseData: any = null;
+
+      if (editId) {
+        const { data: upData, error: upErr } = await supabase
+          .from('form_responses')
+          .update({ data: data, status: status, updated_at: new Date().toISOString() })
+          .eq('id', editId)
+          .select('id')
+          .maybeSingle();
+        if (upErr) { console.error(`${FORM_NAME}: Update error:`, upErr); throw upErr; }
+        responseData = upData;
+      } else {
+        const { data: inData, error: inErr } = await supabase
+          .from('form_responses')
+          .insert([{
+            form_id: currentFormId,
+            patient_id: patientId,
+            staff_id: profile.id,
+            data: data,
+            status: status
+          }])
+          .select('id')
+          .maybeSingle();
+        if (inErr) { console.error(`${FORM_NAME}: Insert error:`, inErr); throw inErr; }
+        responseData = inData;
       }
 
-      if (!responseData) {
-        throw new Error('No data returned from form submission. This might be due to database permissions (RLS).');
-      }
+      const responseId = responseData?.id ?? editId ?? null;
 
-      console.log(`${FORM_NAME}: Response inserted successfully, ID:`, responseData.id);
+      console.log(`${FORM_NAME}: Response submitted, ID:`, responseId);
       
       setNotification({ 
         type: 'success', 
@@ -362,17 +370,6 @@ export const TreatmentAdministrationRecord: React.FC = () => {
             ))}
           </div>
         </section>
-        <div className="flex flex-row items-center justify-end gap-3 no-print pt-4 border-t border-zinc-100">
-          <Button
-            type="button"
-            onClick={handleSubmit(onSubmit)}
-            disabled={isSubmitting || isSavingDraft}
-            className="h-10 px-4 rounded-xl shadow-md bg-partners-blue-dark hover:bg-partners-blue transition-all active:scale-95"
-          >
-            <Send className="w-4 h-4 mr-2" />
-            {isSubmitting ? 'Submitting...' : 'Submit Form'}
-          </Button>
-        </div>
       </form>
       {notification && (
         <Notification 

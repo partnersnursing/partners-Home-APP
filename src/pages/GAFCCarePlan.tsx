@@ -327,19 +327,17 @@ export const GAFCCarePlan: React.FC = () => {
           data: data,
           status: status
         }])
-        .select()
-        .single();
+        .select('id')
+        .maybeSingle();
       
       if (responseError) {
         console.error('GAFC Care Plan: Response insertion error:', responseError);
         throw responseError;
       }
 
-      if (!responseData) {
-        throw new Error('No data returned from form submission. This might be due to database permissions (RLS).');
-      }
+      const responseId = responseData?.id ?? null;
 
-      console.log('GAFC Care Plan: Response inserted successfully, ID:', responseData.id);
+      console.log('GAFC Care Plan: Response submitted successfully, ID:', responseId);
 
       // 3. Insert care manager signature into signatures table
       if (data.signatures.careManagerSignature) {
@@ -347,7 +345,7 @@ export const GAFCCarePlan: React.FC = () => {
         const { error: sigError } = await supabase
           .from('signatures')
           .insert([{
-            parent_id: responseData.id,
+            parent_id: responseId,
             parent_type: 'form_response',
             signer_id: profile.id,
             signature_data: data.signatures.careManagerSignature
@@ -848,17 +846,6 @@ export const GAFCCarePlan: React.FC = () => {
             </div>
           </div>
         </section>
-        <div className="flex flex-row items-center justify-end gap-3 no-print pt-4 border-t border-zinc-100">
-          <Button
-            type="button"
-            onClick={handleSubmit(onSubmit)}
-            disabled={isSubmitting}
-            className="h-10 px-4 rounded-xl shadow-md bg-partners-blue-dark hover:bg-partners-blue transition-all active:scale-95"
-          >
-            <Send className="w-4 h-4 mr-2" />
-            {isSubmitting ? 'Submitting...' : 'Submit Form'}
-          </Button>
-        </div>
       </form>
       {notification && (
         <Notification 
