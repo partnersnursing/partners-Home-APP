@@ -479,6 +479,16 @@ export const PatientResourceData: React.FC = () => {
             </div>
           </div>
         </section>
+        <div className="flex justify-end pt-2 no-print">
+          <Button
+            type="submit"
+            disabled={isSubmitting || isSavingDraft || isGeneratingPDF}
+            className="h-11 px-6 md:px-8 rounded-xl shadow-md"
+          >
+            <Send className="w-4 h-4 mr-2" />
+            {isSubmitting ? 'Submitting...' : 'Submit Form'}
+          </Button>
+        </div>
       </form>
       {notification && (
         <Notification 

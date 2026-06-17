@@ -70,6 +70,7 @@ export interface PDFFormViewerProps {
   pdfPath: string;
   accentColor?: string;
   formName?: string;
+  showBottomSubmit?: boolean;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -77,6 +78,7 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
   title, description, pdfPath,
   accentColor = 'bg-blue-100 text-blue-600',
   formName,
+  showBottomSubmit = false,
 }) => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -1107,6 +1109,19 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
           </div>
         )}
       </div>
+
+      {showBottomSubmit && !viewingStoredPdf && (
+        <div className="flex justify-end no-print">
+          <button
+            onClick={() => setShowModal(true)}
+            disabled={pdfLoading || !!loadError || activePdfPath === null}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-partners-blue-dark hover:opacity-90 rounded-xl transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Send size={16} />
+            Submit
+          </button>
+        </div>
+      )}
 
       {/* Info banner */}
       {!loadError && !pdfLoading && activePdfPath !== null && (

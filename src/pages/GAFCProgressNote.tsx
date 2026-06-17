@@ -727,6 +727,16 @@ export const GAFCProgressNote: React.FC = () => {
             </div>
           </div>
         </section>
+        <div className="flex justify-end pt-2 no-print">
+          <Button
+            type="submit"
+            disabled={isSubmitting}
+            className="h-10 px-4 rounded-xl shadow-md bg-partners-blue-dark hover:bg-partners-blue transition-all active:scale-95"
+          >
+            <Send className="w-4 h-4 mr-2" />
+            {isSubmitting ? 'Submitting...' : 'Submit Note'}
+          </Button>
+        </div>
       </form>
       {notification && (
         <Notification 

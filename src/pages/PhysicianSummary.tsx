@@ -8,5 +8,6 @@ export const PhysicianSummary: React.FC = () => (
     pdfPath="/pdfs/physicalsummary.pdf"
     accentColor="bg-amber-100 text-amber-600"
     formName="Physician Summary (PSF-1)"
+    showBottomSubmit
   />
 );
