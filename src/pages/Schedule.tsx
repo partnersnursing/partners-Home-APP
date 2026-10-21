@@ -65,6 +65,11 @@ interface Patient {
   id: string;
   first_name: string;
   last_name: string;
+  street?: string | null;
+  apt?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
 }
 
 interface Staff {
@@ -157,7 +162,7 @@ export const Schedule: React.FC = () => {
   const fetchFormData = async () => {
     try {
       const [patientsRes, staffRes, profilesRes] = await Promise.all([
-        supabase.from('patients').select('id, first_name, last_name').order('last_name'),
+        supabase.from('patients').select('id, first_name, last_name, street, apt, city, state, zip').order('last_name'),
         supabase.from('staff').select('id, name').order('name'),
         supabase.from('profiles').select('id, full_name').order('full_name'),
       ]);
@@ -195,13 +200,26 @@ export const Schedule: React.FC = () => {
 
       const { data, error } = await supabase
         .from('visits')
-        .select(`*, patient:patients(first_name, last_name), staff:staff(name)`)
+        .select(`*, patient:patients(first_name, last_name)`)
         .gte('scheduled_at', startISO)
         .lte('scheduled_at', endISO)
         .order('scheduled_at', { ascending: true });
 
       if (error) throw error;
-      setVisits(data || []);
+
+      // fetch staff names separately (no FK constraint needed)
+      const staffIds = [...new Set((data || []).map((v: any) => v.staff_id).filter(Boolean))];
+      let staffMap: Record<string, string> = {};
+      if (staffIds.length > 0) {
+        const { data: staffData } = await supabase.from('staff').select('id, name').in('id', staffIds);
+        (staffData || []).forEach((s: any) => { staffMap[s.id] = s.name; });
+      }
+
+      const visits = (data || []).map((v: any) => ({
+        ...v,
+        staff: { name: staffMap[v.staff_id] || 'Unknown' }
+      }));
+      setVisits(visits);
     } catch (error) {
       console.error('Error fetching visits:', error);
     } finally {
@@ -222,8 +240,8 @@ export const Schedule: React.FC = () => {
         .lte('scheduled_at', endOfMonth);
       const set = new Set(
         (data || []).map(v => {
-          const d = new Date(v.scheduled_at);
-          return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+          const [yr, mo, dy] = v.scheduled_at.substring(0, 10).split('-').map(Number);
+          return `${yr}-${mo - 1}-${dy}`;
         })
       );
       setDotDates(set);
@@ -236,11 +254,19 @@ export const Schedule: React.FC = () => {
     if (Object.keys(errors).length > 0) console.warn('Schedule: Form validation errors:', errors);
   }, [errors]);
 
+  const CANCEL_STATUSES = ['Cancelled', 'Client Cancelled - Health (MLOA)', 'Client Cancelled - Non-Medical (NMLOA)', 'Staff Cancelled', 'Office Cancelled'];
+
   const saveVisit = async (data: VisitFormValues) => {
+    const isCancel = CANCEL_STATUSES.includes(data.status);
+    const payload = {
+      ...data,
+      status: isCancel ? 'archived' : (data.status || 'Open'),
+      cancellation_reason: isCancel ? (data.cancellation_reason || data.status) : data.cancellation_reason,
+    };
     const response = await fetch('/api/visits/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...data, status: data.status || 'Open' })
+      body: JSON.stringify(payload)
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'Failed to schedule visit');
@@ -351,7 +377,8 @@ export const Schedule: React.FC = () => {
   // `visits` is already fetched for the exact range; the isInRange guard is a
   // safety net for any timezone edge cases at the boundaries.
   const filteredVisits = visits.filter(v => {
-    const visitDate = new Date(v.scheduled_at);
+    const [yr, mo, dy] = v.scheduled_at.substring(0, 10).split('-').map(Number);
+    const visitDate = new Date(yr, mo - 1, dy);
     const inRange = isInRange(visitDate, rangeStart, rangeEnd ?? rangeStart);
     if (filterStatus === 'all') return inRange;
     return inRange && v.status === filterStatus;
@@ -815,7 +842,14 @@ export const Schedule: React.FC = () => {
                     <button key={p.id} type="button"
                       className={clsx("w-full text-left px-4 py-3 text-sm hover:bg-zinc-50 transition-colors flex items-center justify-between",
                         selectedPatientId === p.id ? "bg-partners-blue-dark/5 text-partners-blue-dark font-bold" : "text-zinc-700")}
-                      onClick={() => { setValue('patient_id', p.id); setSelectedPatientId(p.id); setPatientSearchTerm(`${p.first_name} ${p.last_name}`); setShowPatientDropdown(false); }}>
+                      onClick={() => {
+                        setValue('patient_id', p.id);
+                        setSelectedPatientId(p.id);
+                        setPatientSearchTerm(`${p.first_name} ${p.last_name}`);
+                        setShowPatientDropdown(false);
+                        const addr = [p.street, p.apt, p.city, p.state, p.zip].filter(Boolean).join(', ');
+                        if (addr) setValue('location', addr);
+                      }}>
                       <span>{p.last_name}, {p.first_name}</span>
                       {selectedPatientId === p.id && <CheckCircle2 size={14} />}
                     </button>
