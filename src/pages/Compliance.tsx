@@ -1,20 +1,73 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../services/supabase';
-import { 
-  ShieldCheck, 
-  AlertTriangle, 
-  CheckCircle2, 
+import { useAuth } from '../context/AuthContext';
+import {
+  ShieldCheck,
+  AlertTriangle,
+  CheckCircle2,
   Clock,
   FileText,
   BarChart3,
   Search,
   Loader2,
-  X
+  X,
+  CalendarDays,
+  UserCheck,
+  Stethoscope,
 } from 'lucide-react';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
 import { Notification, NotificationType } from '../components/Notification';
 import { useComplianceSummary } from '../queries/compliance';
+
+// ── Frequency filter types ──────────────────────────────────────────────────
+type FrequencyFilter = 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'alltime' | 'custom';
+
+function getDateRange(filter: FrequencyFilter, customFrom?: string, customTo?: string): { from: Date; to: Date } {
+  const now = new Date();
+  const to = new Date(now);
+  to.setHours(23, 59, 59, 999);
+
+  switch (filter) {
+    case 'weekly': {
+      const from = new Date(now);
+      from.setDate(now.getDate() - 7);
+      from.setHours(0, 0, 0, 0);
+      return { from, to };
+    }
+    case 'biweekly': {
+      const from = new Date(now);
+      from.setDate(now.getDate() - 14);
+      from.setHours(0, 0, 0, 0);
+      return { from, to };
+    }
+    case 'monthly': {
+      const from = new Date(now.getFullYear(), now.getMonth(), 1);
+      return { from, to };
+    }
+    case 'quarterly': {
+      const q = Math.floor(now.getMonth() / 3);
+      const from = new Date(now.getFullYear(), q * 3, 1);
+      return { from, to };
+    }
+    case 'alltime': {
+      const from = new Date(2000, 0, 1); // epoch-ish start
+      return { from, to };
+    }
+    case 'custom': {
+      const from = customFrom ? new Date(customFrom + 'T00:00:00') : new Date(now.getFullYear(), now.getMonth(), 1);
+      const cTo  = customTo   ? new Date(customTo   + 'T23:59:59') : to;
+      return { from, to: cTo };
+    }
+  }
+}
+
+interface VisitFrequencyData {
+  rnVisits: number;
+  careManagerVisits: number;
+  rnByPatient: Record<string, number>;
+  careManagerByPatient: Record<string, number>;
+}
 
 interface ComplianceStat {
   label: string;
@@ -24,6 +77,9 @@ interface ComplianceStat {
 }
 
 export const Compliance: React.FC = () => {
+  const { profile } = useAuth();
+  const userRole = profile?.role ?? '';
+
   const [stats, setStats] = useState<ComplianceStat[]>([]);
   const [recentActivity, setRecentActivity] = useState<any[]>([]);
   const [criticalAlerts, setCriticalAlerts] = useState<any[]>([]);
@@ -32,6 +88,13 @@ export const Compliance: React.FC = () => {
   const [isAlertsModalOpen, setIsAlertsModalOpen] = useState(false);
   const [notification, setNotification] = useState<{ type: NotificationType, message: string } | null>(null);
   const complianceSummaryQuery = useComplianceSummary();
+
+  // ── Visit frequency filter state ──────────────────────────────────────────
+  const [freqFilter, setFreqFilter]   = useState<FrequencyFilter>('monthly');
+  const [customFrom, setCustomFrom]   = useState('');
+  const [customTo,   setCustomTo]     = useState('');
+  const [visitData,  setVisitData]    = useState<VisitFrequencyData | null>(null);
+  const [visitLoading, setVisitLoading] = useState(false);
 
   useEffect(() => {
     const summary = complianceSummaryQuery.data;
@@ -42,6 +105,63 @@ export const Compliance: React.FC = () => {
     setRecentActivity(summary.recentActivity);
     setCriticalAlerts(summary.criticalAlerts);
   }, [complianceSummaryQuery.data, complianceSummaryQuery.isFetching, complianceSummaryQuery.isLoading]);
+
+  // ── Fetch visit frequency data ─────────────────────────────────────────────
+  const fetchVisitFrequency = useCallback(async () => {
+    setVisitLoading(true);
+    try {
+      const { from, to } = getDateRange(freqFilter, customFrom || undefined, customTo || undefined);
+
+      // Query visits within date range — all statuses (DB has 'scheduled', not 'completed')
+      const { data: visitsRaw, error: visitsError } = await supabase
+        .from('visits')
+        .select('id, patient_id, staff_id, scheduled_at, status')
+        .gte('scheduled_at', from.toISOString())
+        .lte('scheduled_at', to.toISOString());
+
+      if (visitsError) throw visitsError;
+
+      // Fetch staff roles separately (FK hint unreliable; do manual join)
+      const staffIds = [...new Set((visitsRaw || []).map((v: any) => v.staff_id).filter(Boolean))];
+      let staffRoles: Record<string, string> = {};
+      if (staffIds.length > 0) {
+        const { data: profilesData } = await supabase
+          .from('profiles')
+          .select('id, role')
+          .in('id', staffIds);
+        (profilesData || []).forEach((p: any) => { staffRoles[p.id] = p.role; });
+      }
+
+      const visits = (visitsRaw || []).map((v: any) => ({ ...v, _role: staffRoles[v.staff_id] ?? '' }));
+      let rnVisits = 0, careManagerVisits = 0;
+      const rnByPatient: Record<string, number> = {};
+      const careManagerByPatient: Record<string, number> = {};
+
+      for (const v of visits) {
+        const role = v._role;
+        const pid  = v.patient_id ?? 'unknown';
+        if (role === 'admin' || role === 'nurse') {
+          rnVisits++;
+          rnByPatient[pid] = (rnByPatient[pid] ?? 0) + 1;
+        } else if (role === 'care_manager') {
+          careManagerVisits++;
+          careManagerByPatient[pid] = (careManagerByPatient[pid] ?? 0) + 1;
+        }
+      }
+
+      setVisitData({ rnVisits, careManagerVisits, rnByPatient, careManagerByPatient });
+    } catch (err) {
+      console.error('[Compliance] visit frequency error', err);
+      // Silently fail — don't block the rest of the page
+      setVisitData(null);
+    } finally {
+      setVisitLoading(false);
+    }
+  }, [freqFilter, customFrom, customTo]);
+
+  useEffect(() => {
+    fetchVisitFrequency();
+  }, [fetchVisitFrequency]);
 
   const fetchComplianceData = async () => {
     try {
@@ -192,6 +312,88 @@ export const Compliance: React.FC = () => {
           <BarChart3 className="w-4 h-4 mr-2" />
           Export Report
         </Button>
+      </div>
+
+      {/* ── Visit Frequency Filter ─────────────────────────────────────────── */}
+      <div className="bg-white p-6 rounded-3xl border border-zinc-200 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <h2 className="text-base font-bold text-zinc-900 flex items-center gap-2">
+            <CalendarDays size={18} className="text-partners-blue-dark" />
+            Visit Frequency
+          </h2>
+          <div className="flex flex-wrap gap-2">
+            {(['weekly', 'biweekly', 'monthly', 'quarterly', 'alltime', 'custom'] as FrequencyFilter[]).map(f => (
+              <button
+                key={f}
+                onClick={() => setFreqFilter(f)}
+                className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider transition-colors ${
+                  freqFilter === f
+                    ? 'bg-partners-blue-dark text-white'
+                    : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
+                }`}
+              >
+                {f === 'biweekly' ? 'Bi-Weekly' : f === 'alltime' ? 'All Time' : f.charAt(0).toUpperCase() + f.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {freqFilter === 'custom' && (
+          <div className="flex flex-wrap gap-3 items-center">
+            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">From</label>
+            <input
+              type="date"
+              value={customFrom}
+              onChange={e => setCustomFrom(e.target.value)}
+              className="px-3 py-1.5 text-sm bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-partners-blue-dark/30"
+            />
+            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">To</label>
+            <input
+              type="date"
+              value={customTo}
+              onChange={e => setCustomTo(e.target.value)}
+              className="px-3 py-1.5 text-sm bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-partners-blue-dark/30"
+            />
+          </div>
+        )}
+
+        {visitLoading ? (
+          <div className="flex items-center gap-2 text-sm text-zinc-400 py-2">
+            <Loader2 size={16} className="animate-spin" /> Loading visit data…
+          </div>
+        ) : visitData ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* RN card — visible to admin/manager/nurse */}
+            {['admin', 'manager', 'nurse'].includes(userRole) || !['care_manager'].includes(userRole) ? (
+              <div className="p-5 bg-blue-50 rounded-2xl border border-blue-100">
+                <div className="flex items-center gap-2 mb-3">
+                  <Stethoscope size={18} className="text-blue-600" />
+                  <p className="text-sm font-bold text-blue-900">Registered Nurse Visits</p>
+                </div>
+                <p className="text-3xl font-bold text-blue-700 mb-1">{visitData.rnVisits}</p>
+                <p className="text-[10px] font-bold text-blue-400 uppercase tracking-wider">
+                  {Object.keys(visitData.rnByPatient).length} unique patients
+                </p>
+              </div>
+            ) : null}
+
+            {/* Care Manager card — visible to admin/manager/care_manager */}
+            {['admin', 'manager', 'care_manager'].includes(userRole) || !['nurse'].includes(userRole) ? (
+              <div className="p-5 bg-emerald-50 rounded-2xl border border-emerald-100">
+                <div className="flex items-center gap-2 mb-3">
+                  <UserCheck size={18} className="text-emerald-600" />
+                  <p className="text-sm font-bold text-emerald-900">Care Manager Visits</p>
+                </div>
+                <p className="text-3xl font-bold text-emerald-700 mb-1">{visitData.careManagerVisits}</p>
+                <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">
+                  {Object.keys(visitData.careManagerByPatient).length} unique patients
+                </p>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <p className="text-sm text-zinc-400 py-2">No visit data available for this period.</p>
+        )}
       </div>
 
       {/* Summary Cards */}
