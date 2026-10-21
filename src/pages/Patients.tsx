@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { Button } from '../components/Button';
 import { Link, useSearchParams } from 'react-router-dom';
+import { parseLocalDate } from '../utils/dates';
 import { Modal } from '../components/Modal';
 import { Notification, NotificationType } from '../components/Notification';
 import { FileUpload } from '../components/FileUpload';
@@ -734,7 +735,7 @@ export const Patients: React.FC = () => {
                     </div>
                   </div>
                 </td>
-                <td className="px-6 py-4 text-zinc-600 font-mono text-sm">{new Date(patient.dob).toLocaleDateString()}</td>
+                <td className="px-6 py-4 text-zinc-600 font-mono text-sm">{parseLocalDate(patient.dob)?.toLocaleDateString() ?? '--'}</td>
                 <td className="px-6 py-4">
                   <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${patient.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-600'}`}>
                     {patient.status}
@@ -775,7 +776,7 @@ export const Patients: React.FC = () => {
                 <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${patient.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-600'}`}>{patient.status}</span>
               </div>
               <div className="grid grid-cols-2 gap-4 text-sm">
-                <div><p className="text-xs text-zinc-400 font-bold uppercase">DOB</p><p className="text-zinc-600">{new Date(patient.dob).toLocaleDateString()}</p></div>
+                <div><p className="text-xs text-zinc-400 font-bold uppercase">DOB</p><p className="text-zinc-600">{parseLocalDate(patient.dob)?.toLocaleDateString() ?? '--'}</p></div>
                 <div><p className="text-xs text-zinc-400 font-bold uppercase">Last Visit</p><p className="text-zinc-600">{patient.last_visit ? new Date(patient.last_visit).toLocaleDateString() : '--'}</p></div>
               </div>
               <div className="flex flex-wrap gap-2 pt-2">
