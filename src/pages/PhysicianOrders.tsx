@@ -119,13 +119,23 @@ export const PhysicianOrders: React.FC = () => {
       const fetchPatient = async () => {
         const { data, error } = await supabase
           .from('patients')
-          .select('first_name, last_name, dob')
+          .select('first_name, last_name, dob, diagnoses, pcp:pcp_id(first_name, last_name, phone, npi)')
           .eq('id', selectedPatientId)
           .single();
 
         if (data && !error) {
           setValue('patient.name', `${data.first_name} ${data.last_name}`);
-          setValue('patient.dob', data.dob);
+          if (data.dob) setValue('patient.dob', data.dob);
+          const pcp = Array.isArray(data.pcp) ? (data.pcp as any[])[0] : data.pcp;
+          if (pcp) {
+            setValue('physician.name', `${pcp.first_name} ${pcp.last_name}`);
+            if (pcp.phone) setValue('physician.phone', pcp.phone);
+            if (pcp.npi) setValue('physician.npi', pcp.npi);
+          }
+          if (data.diagnoses && data.diagnoses.length > 0) {
+            setValue('diagnosis.primary', `${data.diagnoses[0].disease} (${data.diagnoses[0].icd10})`);
+            if (data.diagnoses[1]) setValue('diagnosis.secondary', `${data.diagnoses[1].disease} (${data.diagnoses[1].icd10})`);
+          }
         }
       };
       fetchPatient();
