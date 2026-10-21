@@ -682,7 +682,7 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
             return res.blob();
           })
         : new Blob(
-            [await buildFilledBytes(viewingStoredPdf ? (storedPdfBytesRef.current ?? undefined) : undefined)],
+            [await buildFilledBytes(viewingStoredPdf ? (storedPdfBytesRef.current ?? undefined) : undefined) as unknown as ArrayBuffer],
             { type: 'application/pdf' }
           );
       const blobUrl = URL.createObjectURL(pdfBlob);
@@ -717,7 +717,7 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
     setPatientsLoading(true);
     supabase.from('patients').select('id, first_name, last_name, dob, phone, street, apt, city, state, zip, pcp:pcp_id(first_name, last_name)').order('last_name')
       .then(({ data }) => {
-        const loaded = (data as Patient[]) ?? [];
+        const loaded = ((data as unknown) as Patient[]) ?? [];
         setPatients(loaded);
         if (patientIdFromUrl) {
           setSelectedPatientId(patientIdFromUrl);
