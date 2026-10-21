@@ -80,7 +80,7 @@ export const SemiAnnualHealthStatusReport: React.FC = () => {
   const fetchPatients = async () => {
     const { data } = await supabase
       .from('patients')
-      .select('id, first_name, last_name')
+      .select('id, first_name, last_name, dob, phone, street, apt, city, state, zip, pcp:pcp_id(first_name, last_name)')
       .order('last_name', { ascending: true });
     setPatients(data || []);
   };
@@ -104,9 +104,17 @@ export const SemiAnnualHealthStatusReport: React.FC = () => {
   const handlePatientChange = (id: string) => {
     setSelectedPatient(id);
     if (id) {
-      const patient = patients.find(p => p.id === id);
-      if (patient) {
-        setFormData(prev => ({ ...prev, clientName: `${patient.first_name} ${patient.last_name}` }));
+      const p = patients.find(pt => pt.id === id);
+      if (p) {
+        const addressParts = [p.street, p.apt].filter(Boolean).join(' ');
+        const pcpName = p.pcp ? `${p.pcp.first_name} ${p.pcp.last_name}` : '';
+        setFormData(prev => ({
+          ...prev,
+          clientName: `${p.first_name} ${p.last_name}`,
+          dob: p.dob ?? prev.dob,
+          clientAddress: [addressParts, p.city, p.state, p.zip].filter(Boolean).join(', ') || prev.clientAddress,
+          clientPCP: pcpName || prev.clientPCP,
+        }));
       }
     }
   };
