@@ -57,7 +57,7 @@ interface Visit {
     last_name: string;
   };
   staff: {
-    full_name: string;
+    name: string;
   };
 }
 
