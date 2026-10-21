@@ -142,6 +142,8 @@ export const Schedule: React.FC = () => {
   // visit list refreshes whenever the selected range changes
   useEffect(() => { fetchVisits(); }, [rangeStart, rangeEnd]);
   useEffect(() => { fetchFormData(); }, []);
+  // Re-fetch staff/patients each time modal opens so newly added records appear
+  useEffect(() => { if (isModalOpen) fetchFormData(); }, [isModalOpen]);
 
   const getStatusColor = (status: string) => {
     const s = status.toLowerCase();
@@ -220,22 +222,41 @@ export const Schedule: React.FC = () => {
     if (Object.keys(errors).length > 0) console.warn('Schedule: Form validation errors:', errors);
   }, [errors]);
 
+  const saveVisit = async (data: VisitFormValues) => {
+    const response = await fetch('/api/visits/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...data, status: data.status || 'Open' })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Failed to schedule visit');
+    fetchVisits();
+    fetchMonthDots();
+    return result;
+  };
+
   const onSubmit = async (data: VisitFormValues) => {
     try {
-      const response = await fetch('/api/visits/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...data, status: data.status || 'Open' })
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Failed to schedule visit');
+      await saveVisit(data);
       setIsModalOpen(false);
       reset();
       setSelectedPatientId(null);
       setPatientSearchTerm('');
-      fetchVisits();
-      fetchMonthDots();
       setNotification({ type: 'success', message: 'Visit scheduled successfully!' });
+    } catch (error: any) {
+      setNotification({ type: 'error', message: 'Error scheduling visit: ' + error.message });
+    }
+  };
+
+  const onSubmitAndAddAnother = async (data: VisitFormValues) => {
+    try {
+      await saveVisit(data);
+      const staffId = data.staff_id;
+      reset();
+      setValue('staff_id', staffId);
+      setSelectedPatientId(null);
+      setPatientSearchTerm('');
+      setNotification({ type: 'success', message: 'Visit saved! Add next shift.' });
     } catch (error: any) {
       setNotification({ type: 'error', message: 'Error scheduling visit: ' + error.message });
     }
@@ -859,6 +880,10 @@ export const Schedule: React.FC = () => {
 
           <div className="flex justify-end gap-3 pt-4 border-t border-zinc-100">
             <Button variant="secondary" onClick={() => setIsModalOpen(false)} type="button">Cancel</Button>
+            <Button variant="secondary" type="button" disabled={isSubmitting}
+              onClick={handleSubmit(onSubmitAndAddAnother)}>
+              {isSubmitting ? 'Saving...' : '+ Add Another Shift'}
+            </Button>
             <Button type="submit" disabled={isSubmitting}>{isSubmitting ? 'Scheduling...' : 'Schedule Visit'}</Button>
           </div>
         </form>
