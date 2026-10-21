@@ -99,7 +99,10 @@ export const GAFCAideCarePlan: React.FC = () => {
   }, [editId]);
 
   const fetchPatients = async () => {
-    const { data } = await supabase.from('patients').select('id, first_name, last_name').order('last_name', { ascending: true });
+    const { data } = await supabase
+      .from('patients')
+      .select('id, first_name, last_name, dob, phone, street, apt, city, state, zip')
+      .order('last_name', { ascending: true });
     setPatients(data || []);
   };
 
@@ -125,8 +128,18 @@ export const GAFCAideCarePlan: React.FC = () => {
   const handlePatientChange = (id: string) => {
     setSelectedPatient(id);
     if (id) {
-      const patient = patients.find(p => p.id === id);
-      if (patient) update('name', `${patient.first_name} ${patient.last_name}`);
+      const p = patients.find(pt => pt.id === id);
+      if (p) {
+        const addressParts = [p.street, p.apt].filter(Boolean).join(' ');
+        setFormData(prev => ({
+          ...prev,
+          name: `${p.first_name} ${p.last_name}`,
+          dob: p.dob ?? prev.dob,
+          address: addressParts || prev.address,
+          city: [p.city, p.state, p.zip].filter(Boolean).join(', ') || prev.city,
+          homePhone: p.phone ?? prev.homePhone,
+        }));
+      }
     }
   };
 
