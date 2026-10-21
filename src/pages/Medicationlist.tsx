@@ -66,7 +66,7 @@ export const MedicationList: React.FC = () => {
   }, [editId]);
 
   const fetchPatients = async () => {
-    const { data } = await supabase.from('patients').select('id, first_name, last_name').order('last_name', { ascending: true });
+    const { data } = await supabase.from('patients').select('id, first_name, last_name, pcp:pcp_id(first_name, last_name, phone)').order('last_name', { ascending: true });
     setPatients(data || []);
   };
 
@@ -99,7 +99,14 @@ export const MedicationList: React.FC = () => {
     setSelectedPatient(id);
     if (id) {
       const patient = patients.find(p => p.id === id);
-      if (patient) setFormData(prev => ({ ...prev, clientName: `${patient.first_name} ${patient.last_name}` }));
+      if (patient) {
+        setFormData(prev => ({
+          ...prev,
+          clientName: `${patient.first_name} ${patient.last_name}`,
+          pcpName: patient.pcp ? `${patient.pcp.first_name} ${patient.pcp.last_name}` : prev.pcpName,
+          pcpNumber: patient.pcp?.phone ?? prev.pcpNumber,
+        }));
+      }
     }
   };
 
