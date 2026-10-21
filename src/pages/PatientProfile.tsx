@@ -10,6 +10,7 @@ import {
   Building2,
 } from 'lucide-react';
 import { Button } from '../components/Button';
+import { parseLocalDate } from '../utils/dates';
 import { Logo } from '../components/Logo';
 import { format, addYears, addMonths, isAfter, isBefore, subDays, addDays } from 'date-fns';
 import { generateFormPDF } from '../services/pdfService';
@@ -255,7 +256,7 @@ const ComplianceItem: React.FC<{
       </div>
       <div className="space-y-1">
         <p className="text-sm font-bold text-zinc-900">
-          {lastDate ? format(new Date(lastDate), 'MMM d, yyyy') : 'Never'}
+          {lastDate ? format(parseLocalDate(lastDate)!, 'MMM d, yyyy') : 'Never'}
         </p>
         <p className="text-[10px] text-zinc-500">
           Next Due: {dueDate ? format(dueDate, 'MMM d, yyyy') : 'TBD'}
@@ -445,7 +446,7 @@ export const PatientProfile: React.FC = () => {
               <div className="flex flex-wrap gap-6 text-zinc-500">
                 <div className="flex items-center gap-2">
                   <Calendar size={18} className="text-zinc-400" />
-                  <span>DOB: {patient.dob ? format(new Date(patient.dob), 'MMMM d, yyyy') : 'N/A'}</span>
+                  <span>DOB: {patient.dob ? format(parseLocalDate(patient.dob)!, 'MMMM d, yyyy') : 'N/A'}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <User size={18} className="text-zinc-400" />
@@ -578,9 +579,9 @@ export const PatientProfile: React.FC = () => {
           </div>
           <div className="p-6 grid grid-cols-1 sm:grid-cols-2 gap-6">
             {[
-              ['MDS Date', patient.mds_date ? format(new Date(patient.mds_date), 'MMM d, yyyy') : null],
+              ['MDS Date', patient.mds_date ? format(parseLocalDate(patient.mds_date)!, 'MMM d, yyyy') : null],
               ['Hospital of Choice', patient.hospital_of_choice],
-              ['Start of Service', patient.start_of_service ? format(new Date(patient.start_of_service), 'MMM d, yyyy') : null],
+              ['Start of Service', patient.start_of_service ? format(parseLocalDate(patient.start_of_service)!, 'MMM d, yyyy') : null],
               ["Mother's Maiden Name", patient.mothers_maiden_name],
               ['Primary Payer', patient.primary_payer],
               ['Primary Payer ID Number', patient.primary_payer_id],
@@ -791,11 +792,11 @@ export const PatientProfile: React.FC = () => {
         <div className="p-8">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
             <ComplianceItem title="Annual Physical" lastDate={patient.last_annual_physical}
-              dueDate={patient.last_annual_physical ? addYears(new Date(patient.last_annual_physical), 1) : null} type="annual" />
+              dueDate={patient.last_annual_physical ? addYears(parseLocalDate(patient.last_annual_physical)!, 1) : null} type="annual" />
             <ComplianceItem title="Health Status Report" lastDate={patient.last_semi_annual_report}
-              dueDate={patient.last_semi_annual_report ? addMonths(new Date(patient.last_semi_annual_report), 6) : null} type="semi-annual" />
+              dueDate={patient.last_semi_annual_report ? addMonths(parseLocalDate(patient.last_semi_annual_report)!, 6) : null} type="semi-annual" />
             <ComplianceItem title="Monthly Visit" lastDate={patient.last_monthly_visit}
-              dueDate={patient.last_monthly_visit ? addMonths(new Date(patient.last_monthly_visit), 1) : null} type="monthly" />
+              dueDate={patient.last_monthly_visit ? addMonths(parseLocalDate(patient.last_monthly_visit)!, 1) : null} type="monthly" />
 
             <div className="p-4 rounded-2xl border border-zinc-100 bg-zinc-50/30 space-y-3">
               <div className="flex justify-between items-start">
