@@ -156,13 +156,27 @@ export const Schedule: React.FC = () => {
 
   const fetchFormData = async () => {
     try {
-      const [patientsRes, staffRes] = await Promise.all([
+      const [patientsRes, staffRes, profilesRes] = await Promise.all([
         supabase.from('patients').select('id, first_name, last_name').order('last_name'),
-        supabase.from('profiles').select('id, full_name').order('full_name')
+        supabase.from('staff').select('id, name').order('name'),
+        supabase.from('profiles').select('id, full_name').order('full_name'),
       ]);
       setPatients(patientsRes.data || []);
       setFilteredPatients(patientsRes.data || []);
-      setStaffList(staffRes.data || []);
+
+      // Merge staff + profiles, dedupe by lowercase name (staff takes priority)
+      const merged: { id: string; full_name: string }[] = [];
+      const seen = new Set<string>();
+      for (const s of (staffRes.data || [])) {
+        const key = (s.name || '').toLowerCase().trim();
+        if (key && !seen.has(key)) { seen.add(key); merged.push({ id: s.id, full_name: s.name }); }
+      }
+      for (const p of (profilesRes.data || [])) {
+        const key = (p.full_name || '').toLowerCase().trim();
+        if (key && !seen.has(key)) { seen.add(key); merged.push({ id: p.id, full_name: p.full_name }); }
+      }
+      merged.sort((a, b) => a.full_name.localeCompare(b.full_name));
+      setStaffList(merged);
     } catch (error) {
       console.error('Error fetching form data:', error);
     }
@@ -181,7 +195,7 @@ export const Schedule: React.FC = () => {
 
       const { data, error } = await supabase
         .from('visits')
-        .select(`*, patient:patients(first_name, last_name), staff:profiles(full_name)`)
+        .select(`*, patient:patients(first_name, last_name), staff:staff(name)`)
         .gte('scheduled_at', startISO)
         .lte('scheduled_at', endISO)
         .order('scheduled_at', { ascending: true });
@@ -356,7 +370,7 @@ export const Schedule: React.FC = () => {
         scheduledAt: visit.scheduled_at,
         time: `${visit.start_time || '--'} - ${visit.end_time || '--'}`,
         location: visit.location,
-        staffName: visit.staff.full_name,
+        staffName: visit.staff.name,
         status: getExportStatusLabel(visit),
       }));
 
@@ -634,7 +648,7 @@ export const Schedule: React.FC = () => {
                       </div>
                       <div className="flex items-center gap-2">
                         <User size={16} className="text-zinc-400" />
-                        <span className="truncate max-w-[150px]">Staff: {visit.staff.full_name}</span>
+                        <span className="truncate max-w-[150px]">Staff: {visit.staff.name}</span>
                       </div>
                     </div>
                   </div>
@@ -721,7 +735,7 @@ export const Schedule: React.FC = () => {
               </div>
               <div className="space-y-1">
                 <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Assigned Staff</p>
-                <div className="flex items-center gap-2 text-zinc-700"><User size={16} className="text-partners-blue-dark" />{selectedVisit.staff.full_name}</div>
+                <div className="flex items-center gap-2 text-zinc-700"><User size={16} className="text-partners-blue-dark" />{selectedVisit.staff.name}</div>
               </div>
               <div className="space-y-1">
                 <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Current Status</p>
