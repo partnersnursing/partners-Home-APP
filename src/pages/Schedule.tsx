@@ -146,6 +146,11 @@ export const Schedule: React.FC = () => {
   useEffect(() => { fetchMonthDots(); }, [currentMonth]);
   // visit list refreshes whenever the selected range changes
   useEffect(() => { fetchVisits(); }, [rangeStart, rangeEnd]);
+  // auto-refresh every 30s to pick up external DB changes
+  useEffect(() => {
+    const id = setInterval(() => { fetchVisits(); fetchMonthDots(); }, 30000);
+    return () => clearInterval(id);
+  }, [rangeStart, rangeEnd]);
   useEffect(() => { fetchFormData(); }, []);
   // Re-fetch staff/patients each time modal opens so newly added records appear
   useEffect(() => { if (isModalOpen) fetchFormData(); }, [isModalOpen]);
