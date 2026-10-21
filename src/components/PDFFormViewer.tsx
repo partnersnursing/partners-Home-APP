@@ -73,7 +73,19 @@ interface PageDim {
   rotation: number;
 }
 
-interface Patient { id: string; first_name: string; last_name: string; }
+interface Patient {
+  id: string;
+  first_name: string;
+  last_name: string;
+  dob?: string | null;
+  phone?: string | null;
+  street?: string | null;
+  apt?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+  pcp?: { first_name: string; last_name: string } | null;
+}
 
 export interface PDFFormViewerProps {
   title: string;
@@ -438,12 +450,18 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
                   const key  = `${Math.round(rect.x)}_${Math.round(rect.y)}_${Math.round(x2)}_${Math.round(y2)}`;
                   let info   = rectInfoMap.get(key);
                   if (!info) {
-                    for (const [, v] of rectInfoMap) {
-                      const p = v.pdfjsRect;
-                      if (Math.abs(p[0]-rect.x)<2 && Math.abs(p[1]-rect.y)<2 &&
-                          Math.abs(p[2]-x2)<2     && Math.abs(p[3]-y2)<2) { info = v; break; }
+                    // Try with a 2-pt tolerance first, then 5-pt for scanned/rotated PDFs
+                    for (const tol of [2, 5]) {
+                      for (const [, v] of rectInfoMap) {
+                        const p = v.pdfjsRect;
+                        if (Math.abs(p[0]-rect.x)<tol && Math.abs(p[1]-rect.y)<tol &&
+                            Math.abs(p[2]-x2)<tol     && Math.abs(p[3]-y2)<tol) { info = v; break; }
+                      }
+                      if (info) break;
                     }
                   }
+                  // If still no match, log a warning — field may appear on wrong page
+                  if (!info) console.warn('[PDFFormViewer] no page match for field:', name, rect);
                   const pageIndex = info?.pageIndex ?? 0;
                   const pr        = info?.pdfjsRect ?? [rect.x, rect.y, x2, y2];
 
@@ -697,13 +715,103 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
   useEffect(() => {
     if (!showModal) return;
     setPatientsLoading(true);
-    supabase.from('patients').select('id, first_name, last_name').order('last_name')
+    supabase.from('patients').select('id, first_name, last_name, dob, phone, street, apt, city, state, zip, pcp:pcp_id(first_name, last_name)').order('last_name')
       .then(({ data }) => {
-        setPatients(data ?? []);
-        if (patientIdFromUrl) setSelectedPatientId(patientIdFromUrl);
+        const loaded = (data as Patient[]) ?? [];
+        setPatients(loaded);
+        if (patientIdFromUrl) {
+          setSelectedPatientId(patientIdFromUrl);
+          // Auto-populate using loaded list (state not yet updated, use local var)
+          const p = loaded.find(pt => pt.id === patientIdFromUrl);
+          if (p) {
+            const fullName = `${p.first_name} ${p.last_name}`;
+            const address  = [p.street, p.apt].filter(Boolean).join(' ');
+            const cityStateZip = [p.city, p.state, p.zip].filter(Boolean).join(', ');
+            const fullAddress = [address, cityStateZip].filter(Boolean).join(', ');
+            const pcpName = (p.pcp as any) ? `${(p.pcp as any).first_name} ${(p.pcp as any).last_name}` : '';
+            const dobFmt = p.dob ? (() => { const [y,m,d] = p.dob!.split('-'); return `${m}/${d}/${y}`; })() : '';
+            const fieldMap: Array<{ patterns: string[]; value: string }> = [
+              { patterns: ['patient_name','patientname','name_of_patient','client_name','clientname','member_name'], value: fullName },
+              { patterns: ['first_name','firstname'],  value: p.first_name },
+              { patterns: ['last_name','lastname'],    value: p.last_name },
+              { patterns: ['date_of_birth','dob','birth_date','birthdate'], value: dobFmt },
+              { patterns: ['telephone','phone','tel','phone_number'], value: p.phone ?? '' },
+              { patterns: ['address'],  value: fullAddress },
+              { patterns: ['street'],   value: address },
+              { patterns: ['city'],     value: p.city  ?? '' },
+              { patterns: ['state'],    value: p.state ?? '' },
+              { patterns: ['zip'],      value: p.zip   ?? '' },
+              { patterns: ['pcp','primary_care','physician','provider'], value: pcpName },
+            ];
+            setFormValues(prev => {
+              const next = { ...prev };
+              for (const { patterns, value } of fieldMap) {
+                if (!value) continue;
+                const keys = fields.filter(f => patterns.some(pat => f.valueKey.toLowerCase().includes(pat))).map(f => f.valueKey);
+                for (const k of keys) { if (!next[k]) next[k] = value; }
+              }
+              return next;
+            });
+          }
+        }
         setPatientsLoading(false);
       });
   }, [patientIdFromUrl, showModal]);
+
+  // Auto-populate form fields with patient data when a patient is selected.
+  // Maps common PDF field name patterns → patient record values.
+  const autoPopulateFromPatient = (patientId: string) => {
+    const p = patients.find(pt => pt.id === patientId);
+    if (!p) return;
+
+    const fullName   = `${p.first_name} ${p.last_name}`;
+    const address    = [p.street, p.apt].filter(Boolean).join(' ');
+    const cityStateZip = [p.city, p.state, p.zip].filter(Boolean).join(', ');
+    const fullAddress = [address, cityStateZip].filter(Boolean).join(', ');
+    const pcpName    = p.pcp ? `${p.pcp.first_name} ${p.pcp.last_name}` : '';
+
+    // Build a mapping of candidate field-name substrings → value.
+    // PDF field names vary between forms, so we match case-insensitively.
+    const fieldMap: Array<{ patterns: string[]; value: string }> = [
+      { patterns: ['patient_name', 'patientname', 'name_of_patient', 'client_name', 'clientname', 'member_name'], value: fullName },
+      { patterns: ['first_name', 'firstname'],  value: p.first_name },
+      { patterns: ['last_name', 'lastname'],    value: p.last_name },
+      { patterns: ['date_of_birth', 'dob', 'birth_date', 'birthdate'],
+        value: p.dob ? (() => { const [y,m,d] = p.dob!.split('-'); return `${m}/${d}/${y}`; })() : '' },
+      { patterns: ['telephone', 'phone', 'tel', 'phone_number'], value: p.phone ?? '' },
+      { patterns: ['address'],  value: fullAddress },
+      { patterns: ['street'],   value: address },
+      { patterns: ['city'],     value: p.city  ?? '' },
+      { patterns: ['state'],    value: p.state ?? '' },
+      { patterns: ['zip'],      value: p.zip   ?? '' },
+      { patterns: ['pcp', 'primary_care', 'physician', 'provider'], value: pcpName },
+    ];
+
+    setFormValues(prev => {
+      const next = { ...prev };
+      for (const [key] of Object.entries(next)) {
+        const keyLower = key.toLowerCase();
+        for (const { patterns, value } of fieldMap) {
+          if (value && patterns.some(p => keyLower.includes(p))) {
+            // Only populate if still empty (don't overwrite user-typed values)
+            if (!next[key]) next[key] = value;
+            break;
+          }
+        }
+      }
+      // Also seed keys that may not have a value yet (field exists in PDF but not typed yet)
+      for (const { patterns, value } of fieldMap) {
+        if (!value) continue;
+        const fieldKeys = fields
+          .filter(f => patterns.some(p => f.valueKey.toLowerCase().includes(p)))
+          .map(f => f.valueKey);
+        for (const k of fieldKeys) {
+          if (!next[k]) next[k] = value;
+        }
+      }
+      return next;
+    });
+  };
 
   const closeModal = () => {
     setShowModal(false);
@@ -1277,7 +1385,10 @@ export const PDFFormViewer: React.FC<PDFFormViewerProps> = ({
                     <div className="relative">
                       <select
                         value={selectedPatientId}
-                        onChange={e => setSelectedPatientId(e.target.value)}
+                        onChange={e => {
+                          setSelectedPatientId(e.target.value);
+                          if (e.target.value) autoPopulateFromPatient(e.target.value);
+                        }}
                         disabled={!!patientIdFromUrl}
                         className="w-full appearance-none px-4 py-2.5 pr-10 text-sm bg-zinc-50 border border-zinc-200 rounded-xl text-zinc-900 focus:outline-none focus:ring-2 focus:ring-partners-blue-dark/30 focus:border-partners-blue-dark transition-colors disabled:cursor-not-allowed disabled:text-zinc-500"
                       >
