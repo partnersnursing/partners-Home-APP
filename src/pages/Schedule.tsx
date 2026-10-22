@@ -51,6 +51,7 @@ interface Visit {
   end_time: string | null;
   status: string;
   location: string;
+  notes?: string | null;
   cancellation_reason?: string;
   patient: {
     first_name: string;
@@ -127,6 +128,8 @@ export const Schedule: React.FC = () => {
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
   const [patientSearchTerm, setPatientSearchTerm] = useState('');
   const [notification, setNotification] = useState<{ type: NotificationType, message: string } | null>(null);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editingVisitId, setEditingVisitId] = useState<string | null>(null);
 
   // date-range state
   const [rangeStart, setRangeStart] = useState<Date | null>(new Date());
@@ -261,6 +264,33 @@ export const Schedule: React.FC = () => {
 
   const CANCEL_STATUSES = ['Cancelled', 'Client Cancelled - Health (MLOA)', 'Client Cancelled - Non-Medical (NMLOA)', 'Staff Cancelled', 'Office Cancelled'];
 
+  const openEditModal = (visit: Visit) => {
+    setIsEditMode(true);
+    setEditingVisitId(visit.id);
+    // Reverse-map DB status to display status
+    const statusDisplayMap: Record<string, string> = {
+      'scheduled': 'Scheduled',
+      'approved': 'Approved',
+      'reviewed': 'Verified',
+    };
+    const displayStatus = visit.status === 'archived'
+      ? (visit.cancellation_reason || 'Cancelled')
+      : (statusDisplayMap[visit.status] || visit.status);
+    // Pre-fill form
+    setValue('patient_id', visit.patient_id);
+    setSelectedPatientId(visit.patient_id);
+    setPatientSearchTerm(`${visit.patient.last_name}, ${visit.patient.first_name}`);
+    setValue('staff_id', visit.staff_id);
+    setValue('scheduled_at', visit.scheduled_at.substring(0, 10));
+    setValue('start_time', visit.start_time || '');
+    setValue('end_time', visit.end_time || '');
+    setValue('location', visit.location);
+    setValue('notes', visit.notes || '');
+    setValue('status', displayStatus);
+    setIsDetailsModalOpen(false);
+    setIsModalOpen(true);
+  };
+
   const saveVisit = async (data: VisitFormValues) => {
     const isCancel = CANCEL_STATUSES.includes(data.status);
     const payload = {
@@ -280,16 +310,47 @@ export const Schedule: React.FC = () => {
     return result;
   };
 
+  const updateVisit = async (id: string, data: VisitFormValues) => {
+    const isCancel = CANCEL_STATUSES.includes(data.status);
+    const payload = {
+      id,
+      ...data,
+      status: isCancel ? 'archived' : (data.status || 'Open'),
+      cancellation_reason: isCancel ? (data.cancellation_reason || data.status) : data.cancellation_reason,
+    };
+    const response = await fetch('/api/visits/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Failed to update visit');
+    fetchVisits();
+    fetchMonthDots();
+    return result;
+  };
+
+  const closeScheduleModal = () => {
+    setIsModalOpen(false);
+    setIsEditMode(false);
+    setEditingVisitId(null);
+    setSelectedPatientId(null);
+    setPatientSearchTerm('');
+    reset();
+  };
+
   const onSubmit = async (data: VisitFormValues) => {
     try {
-      await saveVisit(data);
-      setIsModalOpen(false);
-      reset();
-      setSelectedPatientId(null);
-      setPatientSearchTerm('');
-      setNotification({ type: 'success', message: 'Visit scheduled successfully!' });
+      if (isEditMode && editingVisitId) {
+        await updateVisit(editingVisitId, data);
+        setNotification({ type: 'success', message: 'Visit updated successfully!' });
+      } else {
+        await saveVisit(data);
+        setNotification({ type: 'success', message: 'Visit scheduled successfully!' });
+      }
+      closeScheduleModal();
     } catch (error: any) {
-      setNotification({ type: 'error', message: 'Error scheduling visit: ' + error.message });
+      setNotification({ type: 'error', message: (isEditMode ? 'Error updating visit: ' : 'Error scheduling visit: ') + error.message });
     }
   };
 
@@ -782,6 +843,11 @@ export const Schedule: React.FC = () => {
             <div className="space-y-2 pt-4 border-t border-zinc-100">
               <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Actions</p>
               <div className="flex flex-wrap gap-2">
+                <button type="button"
+                  onClick={() => openEditModal(selectedVisit)}
+                  className="inline-flex items-center px-4 py-2 bg-amber-500 text-white rounded-xl text-sm font-bold hover:bg-amber-600 transition-colors">
+                  <FileText className="w-4 h-4 mr-2" /> Edit Visit
+                </button>
                 <Link to={`/clinical-note-form?patientId=${selectedVisit.patient_id}&visitId=${selectedVisit.id}`}
                   className="inline-flex items-center px-4 py-2 bg-partners-blue-dark text-white rounded-xl text-sm font-bold hover:bg-blue-800 transition-colors">
                   <FileText className="w-4 h-4 mr-2" /> Clinical Note
@@ -820,9 +886,9 @@ export const Schedule: React.FC = () => {
         )}
       </Modal>
 
-      {/* Schedule Visit Modal */}
-      <Modal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); setSelectedPatientId(null); setPatientSearchTerm(''); reset(); }}
-        title="Schedule New Visit" size="md">
+      {/* Schedule / Edit Visit Modal */}
+      <Modal isOpen={isModalOpen} onClose={closeScheduleModal}
+        title={isEditMode ? "Edit Visit" : "Schedule New Visit"} size="md">
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
           <div className="space-y-2">
             <label className="text-sm font-medium text-zinc-700">Patient</label>
@@ -932,12 +998,16 @@ export const Schedule: React.FC = () => {
           </div>
 
           <div className="flex justify-end gap-3 pt-4 border-t border-zinc-100">
-            <Button variant="secondary" onClick={() => setIsModalOpen(false)} type="button">Cancel</Button>
-            <Button variant="secondary" type="button" disabled={isSubmitting}
-              onClick={handleSubmit(onSubmitAndAddAnother)}>
-              {isSubmitting ? 'Saving...' : '+ Add Another Shift'}
+            <Button variant="secondary" onClick={closeScheduleModal} type="button">Cancel</Button>
+            {!isEditMode && (
+              <Button variant="secondary" type="button" disabled={isSubmitting}
+                onClick={handleSubmit(onSubmitAndAddAnother)}>
+                {isSubmitting ? 'Saving...' : '+ Add Another Shift'}
+              </Button>
+            )}
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? (isEditMode ? 'Updating...' : 'Scheduling...') : (isEditMode ? 'Update Visit' : 'Schedule Visit')}
             </Button>
-            <Button type="submit" disabled={isSubmitting}>{isSubmitting ? 'Scheduling...' : 'Schedule Visit'}</Button>
           </div>
         </form>
       </Modal>
