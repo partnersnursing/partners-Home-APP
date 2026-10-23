@@ -203,8 +203,12 @@ export const Schedule: React.FC = () => {
       const start = rangeStart ?? new Date();
       const end   = rangeEnd   ?? rangeStart ?? new Date();
 
-      const startISO = new Date(start.getFullYear(), start.getMonth(), start.getDate(), 0,  0,  0).toISOString();
-      const endISO   = new Date(end.getFullYear(),   end.getMonth(),   end.getDate(),   23, 59, 59).toISOString();
+      // Use UTC date boundaries to match how visits are stored (UTC midnight).
+      // Using local midnight converted to UTC would shift the range by the
+      // client's UTC offset, causing visits to appear on the wrong day.
+      const pad = (n: number) => String(n).padStart(2, '0');
+      const startISO = `${start.getFullYear()}-${pad(start.getMonth()+1)}-${pad(start.getDate())}T00:00:00.000Z`;
+      const endISO   = `${end.getFullYear()}-${pad(end.getMonth()+1)}-${pad(end.getDate())}T23:59:59.999Z`;
 
       const { data, error } = await supabase
         .from('visits')
@@ -239,8 +243,12 @@ export const Schedule: React.FC = () => {
   // the dot indicators on the calendar grid always reflect the correct month.
   const fetchMonthDots = async () => {
     try {
-      const startOfMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).toISOString();
-      const endOfMonth   = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0, 23, 59, 59).toISOString();
+      const pad2 = (n: number) => String(n).padStart(2, '0');
+      const y = currentMonth.getFullYear();
+      const m = currentMonth.getMonth();
+      const lastDay = new Date(y, m + 1, 0).getDate();
+      const startOfMonth = `${y}-${pad2(m+1)}-01T00:00:00.000Z`;
+      const endOfMonth   = `${y}-${pad2(m+1)}-${pad2(lastDay)}T23:59:59.999Z`;
       const { data } = await supabase
         .from('visits')
         .select('scheduled_at')
@@ -729,7 +737,7 @@ export const Schedule: React.FC = () => {
                         {rangeEnd && !isSameDay(rangeStart!, rangeEnd) && (
                           <p className="text-xs text-zinc-400 flex items-center gap-1 mt-0.5">
                             <CalendarIcon size={11} />
-                            {new Date(visit.scheduled_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                            {(() => { const [y,m,d] = visit.scheduled_at.substring(0,10).split('-').map(Number); return new Date(y,m-1,d).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}); })()}
                           </p>
                         )}
                       </div>
@@ -818,7 +826,7 @@ export const Schedule: React.FC = () => {
               <div className="space-y-1">
                 <p className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Scheduled For</p>
                 <div className="flex flex-col gap-1 text-zinc-700">
-                  <div className="flex items-center gap-2"><CalendarIcon size={16} className="text-partners-blue-dark" />{new Date(selectedVisit.scheduled_at).toLocaleDateString()}</div>
+                  <div className="flex items-center gap-2"><CalendarIcon size={16} className="text-partners-blue-dark" />{(() => { const [y,m,d] = selectedVisit.scheduled_at.substring(0,10).split('-').map(Number); return new Date(y,m-1,d).toLocaleDateString(); })()}</div>
                   <div className="flex items-center gap-2"><Clock size={16} className="text-partners-blue-dark" />{selectedVisit.start_time || '--'} - {selectedVisit.end_time || '--'}</div>
                 </div>
               </div>
